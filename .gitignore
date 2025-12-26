@@ -1,0 +1,14 @@
+﻿# venvs
+venv_fer/
+venv/
+.venv/
+
+# python
+__pycache__/
+*.pyc
+
+# gerados pelo monitor
+monitor.log
+pitch_roll.html
+pitch_roll_log.txt
+refresh_token.js

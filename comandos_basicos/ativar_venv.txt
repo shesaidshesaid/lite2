@@ -1,0 +1,150 @@
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+.\venv\Scripts\Activate.ps1
+python -m venv venv
+
+pip freeze > requirements.txt
+
+pip install -r requirements.txt
+
+
+pip install pipreqs
+pipreqs . --force
+
+Criar apenas o venv correspondente ao computador
+
+PC FER
+python -m venv venv_fer
+
+PC OZO
+python -m venv venv_ozo
+
+PC LEO
+python -m venv venv_leo
+
+PC AND
+python -m venv venv_and
+
+PC PUB
+python -m venv venv_pub
+
+3) Ativar o venv
+
+Ativar somente o venv daquele PC
+
+FER
+.\venv_fer\Scripts\Activate.ps1
+
+OZO
+.\venv_ozo\Scripts\Activate.ps1
+
+LEO
+.\venv_leo\Scripts\Activate.ps1
+
+AND
+.\venv_and\Scripts\Activate.ps1
+
+PUB
+.\venv_pub\Scripts\Activate.ps1
+
+
+Prompt esperado:
+
+(venv_fer) PS C:\...
+
+4) Instalar dependências do projeto
+pip install -r requirements.txt
+
+5) Fixar o interpretador no VS Code (1ª vez)
+
+Ctrl + Shift + P
+
+Python: Select Interpreter
+
+Escolher:
+
+.\venv_fer\Scripts\python.exe
+
+
+(ou o correspondente ao PC)
+
+***************
+✅ Formas CORRETAS de resolver
+OPÇÃO 1 — Um venv por máquina (RECOMENDADA)
+
+Crie um venv com nome diferente por PC:
+
+meu_projeto/
+ ├─ src/
+ ├─ requirements.txt
+ ├─ venv_pc_notebook/
+ ├─ venv_pc_desktop/
+ └─ .vscode/
+
+
+No PC notebook:
+
+python -m venv venv_pc_notebook
+
+
+No PC desktop:
+
+python -m venv venv_pc_desktop
+
+
+Cada VS Code seleciona o seu interpreter local.
+
+✔️ Sem conflito
+✔️ Código compartilhado
+✔️ Ambiente isolado
+✔️ Escalável
+
+
+
+***
+Pergunta 2
+
+Posso mudar o nome do venv depois que ele foi criado?
+
+✅ Resposta curta
+
+Sim, pode renomear a pasta do venv.
+Isso funciona, com alguns cuidados.
+
+O que acontece ao renomear
+
+O Python não depende do nome da pasta, apenas dos caminhos internos.
+
+Exemplo:
+
+venv/  →  venv_pc_notebook/
+
+O que você PRECISA fazer depois
+
+Selecionar novamente o interpreter no VS Code
+
+Ctrl + Shift + P → Python: Select Interpreter
+
+
+(Se existir) Atualizar .vscode/settings.json
+
+{
+  "python.defaultInterpreterPath": "venv_pc_notebook\\Scripts\\python.exe"
+}
+
+
+Reativar:
+
+.\venv_pc_notebook\Scripts\Activate.ps1
+
+O que NÃO quebra ao renomear
+
+pacotes instalados ✔️
+
+pip ✔️
+
+scripts ✔️
+
+**********************************
+
+
