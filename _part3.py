@@ -15,6 +15,8 @@ import _part1 as P1
 import _part2 as P2
 import _part4 as P4
 import _part5 as P5
+import threading
+
 
 
 def ler_ultimo_do_log():

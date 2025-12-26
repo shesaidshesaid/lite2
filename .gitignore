@@ -5,3 +5,4 @@ venv/
 pitch_roll.html
 monitor.log
 pitch_roll_log.txt
+refresh_token*.js
