@@ -215,6 +215,7 @@ def run_monitor():
         else:
             dados = P2._merge_dados(d_pr, d_wind)
             est = P2.avaliar_de_json(dados)
+            now = time.monotonic()
 
             P2.gerar_html(
                 est["pitch_val"], est["roll_val"], est["pitch_cor"], est["roll_cor"],
@@ -227,7 +228,6 @@ def run_monitor():
             processar_alarme_pitch_roll(est)
 
             # Random a cada 5h se não houve alarmes L2/L3/L4 nos últimos 50min
-            now = time.monotonic()
             if (now - P2.alarm_state.ultimo_random) >= (P1.RANDOM_INTERVAL_HOURS * 3600):
                 tempo_limite = now - (P1.RANDOM_SILENCE_PERIOD_MIN * 60)
                 sem_alarmes = (
@@ -240,7 +240,6 @@ def run_monitor():
                     P2.alarm_state.ultimo_random = now
 
             # alarme de vento em intervalos
-            now = time.monotonic()
             if now >= wind_alarm_state["next_wind_check_ts"]:
                 wind_alarm_state["next_wind_check_ts"] = now + P1.VENTO_ALARME_CHECK_INTERVAL_MIN * 60.0
                 verificar_alarme_vento(est.get("vento_med"), est.get("raj"))
@@ -266,6 +265,22 @@ def _main():
     ap = P1.argparse.ArgumentParser()
     ap.add_argument("--stop", action="store_true", help="pede para a instância em execução encerrar e sai")
     args = ap.parse_args()
+
+
+
+def _main():
+    P1.keep_screen_on(True)
+    P2.start_control_server(P1.MUTE_CTRL_PORT)
+    atexit.register(lambda: P1.keep_screen_on(False))
+
+    ap = P1.argparse.ArgumentParser()
+    ap.add_argument("--stop", action="store_true", help="pede para a instância em execução encerrar e sai")
+    args = ap.parse_args()
+
+
+
+
+
 
     if args.stop:
         ok = P1.signal_quit()
