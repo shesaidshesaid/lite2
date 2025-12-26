@@ -71,9 +71,9 @@ def vento_medio(d):
     return (sum(tail) / len(tail)) if tail else None
 
 
-def vento_medio_ui_aux(d):
+def _valor_auxiliar(d, chave_imediata, chave_dict, fallback_fn):
     try:
-        v = d.get("windspdauxmeanv", None)
+        v = d.get(chave_imediata, None)
         if v is not None and math.isfinite(float(v)):
             return float(v)
     except Exception:
@@ -81,34 +81,22 @@ def vento_medio_ui_aux(d):
 
     try:
         spl = d.get("windsplv") or "med. 2 min"
-        m = d.get("windspdauxmean")
+        m = d.get(chave_dict)
         if isinstance(m, dict) and m.get(spl) is not None:
             v = float(m[spl])
-            return v if math.isfinite(v) else vento_medio(d)
+            return v if math.isfinite(v) else fallback_fn(d)
     except Exception:
         pass
 
-    return vento_medio(d)
+    return fallback_fn(d)
+
+
+def vento_medio_ui_aux(d):
+    return _valor_auxiliar(d, "windspdauxmeanv", "windspdauxmean", vento_medio)
 
 
 def rajada_ui_aux(d):
-    try:
-        v = d.get("windspdauxmaxv", None)
-        if v is not None and math.isfinite(float(v)):
-            return float(v)
-    except Exception:
-        pass
-
-    try:
-        spl = d.get("windsplv") or "med. 2 min"
-        m = d.get("windspdauxmax")
-        if isinstance(m, dict) and m.get(spl) is not None:
-            v = float(m[spl])
-            return v if math.isfinite(v) else rajada(d)
-    except Exception:
-        pass
-
-    return rajada(d)
+    return _valor_auxiliar(d, "windspdauxmaxv", "windspdauxmax", rajada)
 
 
 # =========================================================
