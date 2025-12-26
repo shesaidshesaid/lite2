@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import os
-import time
+"""Estado, servidor de controle e renderização de HTML."""
+
+from __future__ import annotations
+
 import json
 import threading
+import time
 import webbrowser
+from collections import deque
 from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from string import Template
-from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+from typing import Deque, Dict, Optional
+from urllib.parse import parse_qs, urlparse
 
 import _part1 as P1
-from _part4 import (
-    coletar_wind_com_fallback,
-    avaliar_de_json,
-)
-
-# garante existência (se você não quiser mexer no _part1.py)
-if not hasattr(P1, "WIND_PREF"):
-    P1.WIND_PREF = None
+import _part2 as P2
+import _part4 as P4
+from _html_fallback import HTML_TPL
 
 
 # =========================================================
@@ -28,14 +28,14 @@ if not hasattr(P1, "WIND_PREF"):
 # =========================================================
 class AlarmState:
     def __init__(self):
-        self.historico_niveis = []
+        self.historico_niveis: Deque = deque(maxlen=10)
         self.nivel_anterior = 0
         self.ultimo_alarme_l2 = 0.0
         self.ultimo_alarme_l3 = 0.0
         self.ultimo_alarme_l4 = 0.0
         self.ultimo_l3_inibe_l2 = 0.0
         self.ultimo_l4_inibe_l23 = 0.0
-        self.mudancas_recentes = []
+        self.mudancas_recentes: Deque = deque()
         self.auto_mute_until = 0.0
         self.ciclos_estaveis = 0
         self.ultimo_random = 0.0
@@ -46,18 +46,15 @@ class AlarmState:
     def detectar_direcao(self, nivel_atual):
         if nivel_atual > self.nivel_anterior:
             return "SUBINDO"
-        elif nivel_atual < self.nivel_anterior:
+        if nivel_atual < self.nivel_anterior:
             return "DESCENDO"
-        else:
-            return "ESTAVEL"
+        return "ESTAVEL"
 
     def eh_alarme_imediato(self, nivel_atual):
-        direcao = self.detectar_direcao(nivel_atual)
-        return bool(direcao == "SUBINDO" and nivel_atual >= 2)
+        return self.detectar_direcao(nivel_atual) == "SUBINDO" and nivel_atual >= 2
 
     def verificar_cooldown(self, nivel):
         agora = time.monotonic()
-
         if nivel <= 2:
             if (agora - self.ultimo_alarme_l2) < (P1.COOLDOWN_L2_MIN * 60):
                 return True
@@ -65,29 +62,24 @@ class AlarmState:
                 return True
             if (agora - self.ultimo_alarme_l4) < (P1.COOLDOWN_L4_MIN * 60):
                 return True
-
         if nivel <= 3:
             if (agora - self.ultimo_alarme_l3) < (P1.COOLDOWN_L3_MIN * 60):
                 return True
             if (agora - self.ultimo_alarme_l4) < (P1.COOLDOWN_L4_MIN * 60):
                 return True
-
         if nivel <= 4:
             if (agora - self.ultimo_alarme_l4) < (P1.COOLDOWN_L4_MIN * 60):
                 return True
-
         return False
 
     def verificar_inibicao(self, nivel):
         agora = time.monotonic()
-
         if nivel == 2:
             inibido_l3 = (agora - self.ultimo_l3_inibe_l2) < (P1.INIBICAO_L3_SOBRE_L2_MIN * 60)
             inibido_l4 = (agora - self.ultimo_l4_inibe_l23) < (P1.INIBICAO_L4_SOBRE_L23_MIN * 60)
             return inibido_l3 or inibido_l4
-        elif nivel == 3:
+        if nivel == 3:
             return (agora - self.ultimo_l4_inibe_l23) < (P1.INIBICAO_L4_SOBRE_L23_MIN * 60)
-
         return False
 
     def verificar_auto_mute(self):
@@ -95,34 +87,25 @@ class AlarmState:
 
     def detectar_oscilacao(self, nivel_atual):
         agora = time.monotonic()
-
         if nivel_atual != self.nivel_anterior:
             self.mudancas_recentes.append((agora, nivel_atual))
-
         janela_s = P1.OSCILACAO_JANELA_MIN * 60
-        self.mudancas_recentes = [(t, n) for t, n in self.mudancas_recentes if (agora - t) <= janela_s]
-
+        self.mudancas_recentes = deque([(t, n) for t, n in self.mudancas_recentes if (agora - t) <= janela_s], maxlen=25)
         if len(self.mudancas_recentes) >= P1.OSCILACAO_MAX_MUDANCAS:
             self.auto_mute_until = agora + (P1.AUTO_MUTE_OSCILACAO_MIN * 60)
             self.mudancas_recentes.clear()
             return True
-
         return False
 
     def atualizar_historico(self, nivel_atual):
         agora = time.monotonic()
         self.historico_niveis.append((agora, nivel_atual))
-
-        if len(self.historico_niveis) > 10:
-            self.historico_niveis = self.historico_niveis[-10:]
-
         if nivel_atual <= 1:
             self.ciclos_estaveis += 1
             if self.ciclos_estaveis >= P1.RESET_ESTAVEL_CICLOS:
                 self._reset_estado()
         else:
             self.ciclos_estaveis = 0
-
         self.nivel_anterior = nivel_atual
 
     def _reset_estado(self):
@@ -143,30 +126,22 @@ class AlarmState:
 
     def deve_tocar_alarme(self, est):
         nivel_atual = self.nivel_combinado(est)
-
         if nivel_atual <= 1:
             self.atualizar_historico(nivel_atual)
             return False, None, "Nível baixo (L0/L1)"
-
         if self.verificar_auto_mute():
             self.atualizar_historico(nivel_atual)
             return False, None, "Auto-mute ativo (oscilação)"
-
         if self.detectar_oscilacao(nivel_atual):
             self.atualizar_historico(nivel_atual)
             return False, None, "Auto-mute ativado (oscilação detectada)"
-
         if self.verificar_cooldown(nivel_atual):
             self.atualizar_historico(nivel_atual)
             return False, None, f"Cooldown L{nivel_atual} ativo"
-
         if self.verificar_inibicao(nivel_atual):
             self.atualizar_historico(nivel_atual)
             return False, None, f"L{nivel_atual} inibido por nível superior"
-
-        eh_imediato = self.eh_alarme_imediato(nivel_atual)
-        motivo = f"IMEDIATO (escalada {self.nivel_anterior}→{nivel_atual})" if eh_imediato else f"Normal L{nivel_atual}"
-
+        motivo = "IMEDIATO (escalada %s→%s)" % (self.nivel_anterior, nivel_atual) if self.eh_alarme_imediato(nivel_atual) else f"Normal L{nivel_atual}"
         self.atualizar_historico(nivel_atual)
         return True, motivo, None
 
@@ -201,61 +176,64 @@ def _clear_mute_L23():
 
 
 # =========================================================
-# Merge + refresh_token + refresh html now
+# Merge + refresh_token
 # =========================================================
-def _merge_dados(d_pr, d_wind):
+
+def merge_dados(d_pr: Optional[Dict], d_wind: Optional[Dict]):
     if not d_pr and not d_wind:
         return None
-
-    dados = {}
+    dados: Dict = {}
     if d_pr:
         for k in P1.KEYS_PR:
             if k in d_pr:
                 dados[k] = d_pr[k]
-
     if d_wind:
         for k in P1.KEYS_WIND:
             if k in d_wind:
                 dados[k] = d_wind[k]
         if d_wind.get("_wind_source"):
             dados["_wind_source"] = d_wind["_wind_source"]
-
     return dados
 
 
-def _gravar_refresh_token():
+def gravar_refresh_token():
     try:
         tok = str(int(time.time() * 1000))
-        with open(P1.FILES["refresh_js"], "w", encoding="utf-8") as f:
-            f.write(f"window.__REFRESH_TOKEN__='{tok}';")
+        Path(P1.FILES["refresh_js"]).write_text(f"window.__REFRESH_TOKEN__='{tok}';", encoding="utf-8")
         return tok
     except Exception:
         return None
 
 
-def _refresh_html_now():
+def refresh_html_now():
     try:
         d_pr = P1.coletar_json(P1.URL_SMP_PITCH_ROLL, tentativas=1, timeout=5)
-        d_wind = coletar_wind_com_fallback(tentativas=1, timeout=5)
-
+        d_wind = P2.coletar_wind_com_fallback(tentativas=1, timeout=5)
         if not d_pr and not d_wind:
-            _gravar_refresh_token()
+            gravar_refresh_token()
             return False
-
-        dados = _merge_dados(d_pr, d_wind)
-        est = avaliar_de_json(dados)
-
+        dados = merge_dados(d_pr, d_wind)
+        est = P4.avaliar_de_json(dados)
         gerar_html(
-            est["pitch_val"], est["roll_val"], est["pitch_cor"], est["roll_cor"],
-            est["rot"], est["raj"], est["raj_cor"], est["status_cor"],
-            est.get("wdir_adj"), est.get("barometro"), est.get("wdir_lbl"),
-            vento_med=est.get("vento_med"), vento_cor=est.get("vento_cor", "verde"),
+            est["pitch_val"],
+            est["roll_val"],
+            est["pitch_cor"],
+            est["roll_cor"],
+            est["rot"],
+            est["raj"],
+            est["raj_cor"],
+            est["status_cor"],
+            est.get("wdir_adj"),
+            est.get("barometro"),
+            est.get("wdir_lbl"),
+            est.get("vento_med"),
+            est.get("vento_cor", "verde"),
+            est.get("wind_source"),
         )
-
-        _gravar_refresh_token()
+        gravar_refresh_token()
         return True
     except Exception:
-        _gravar_refresh_token()
+        gravar_refresh_token()
         return False
 
 
@@ -282,170 +260,125 @@ class _ControlHandler(BaseHTTPRequestHandler):
         try:
             parsed = urlparse(self.path)
             path, qs = parsed.path, parse_qs(parsed.query or "")
-
             if path == "/mute":
                 mins = float(qs.get("mins", ["360"])[0])
                 until = _set_mute_L23_for_minutes(mins)
                 self._reply_json({"ok": True, "muted": True, "muted_until": until})
-
             elif path == "/unmute":
                 _clear_mute_L23()
                 self._reply_json({"ok": True, "muted": False})
-
             elif path == "/mute_status":
-                self._reply_json({"muted": is_muted_L23(), "muted_until": MUTE_L23_UNTIL_TS})
-
+                self._reply_json({"ok": True, "muted": is_muted_L23(), "muted_until": MUTE_L23_UNTIL_TS})
             elif path == "/wind_pref":
-                hv = qs.get("host", [None])[0]
-                if hv is None:
-                    self._reply_json({"ok": True, "host": (P1.WIND_PREF or "auto")})
-                    return
-
-                v = (hv or "").strip().lower()
-                host_set = set(P1.WIND_HOSTS_ORDER)
-
-                if v in ("", "auto", "none", "null"):
-                    P1.WIND_PREF = None
-                    ok = _refresh_html_now()
-                    self._reply_json({"ok": ok, "host": "auto"})
-                elif v in host_set:
-                    P1.WIND_PREF = v
-                    ok = _refresh_html_now()
-                    self._reply_json({"ok": ok, "host": v})
-                else:
-                    self._reply_json({"ok": False, "error": "host inválido"}, code=400)
-
-            elif path == "/wind_pref_status":
-                self._reply_json({"ok": True, "pref": (P1.WIND_PREF or "auto"), "options": P1.WIND_HOSTS_ORDER})
-
+                if qs.get("host"):
+                    val = qs.get("host", ["auto"])[0]
+                    if val == "auto":
+                        P1.WIND_PREF = None
+                    else:
+                        P1.WIND_PREF = val
+                self._reply_json({"ok": True, "host": P1.WIND_PREF})
             else:
-                self._reply_json({"error": "not found"}, code=404)
+                self._reply_json({"ok": False, "error": "unknown"}, 404)
+        except Exception:
+            self._reply_json({"ok": False, "error": "exception"}, 500)
 
-        except Exception as e:
-            self._reply_json({"ok": False, "error": str(e)}, code=500)
 
-
-def start_control_server(port: int = None):
+def start_control_server(port: int = P1.MUTE_CTRL_PORT):
     try:
-        p = int(P1.MUTE_CTRL_PORT if port is None else port)
-        srv = ThreadingHTTPServer(("127.0.0.1", p), _ControlHandler)
+        srv = ThreadingHTTPServer(("127.0.0.1", port), _ControlHandler)
     except Exception:
         return None
-
     thr = threading.Thread(target=srv.serve_forever, daemon=True)
     thr.start()
     return srv
 
 
-# =========================================================
-# HTML rendering (preferencialmente via pitch_roll_template.html em $...)
-# =========================================================
-def _fmt_num(val, spec):
+def _fmt_or_dash(val, fmt):
     try:
-        if val is None:
-            return "---"
-        v = float(val)
-        if not (v == v):  # NaN
-            return "---"
-        return format(v, spec)
+        return fmt.format(float(val))
     except Exception:
         return "---"
 
 
-def _template_path():
-    # compatível com as 2 chaves:
-    # - P1.FILES["tpl"] (padrão do que eu te entreguei)
-    # - P1.FILES["html_template"] (se você preferir)
-    p = None
-    try:
-        p = P1.FILES.get("tpl") or P1.FILES.get("html_template")
-    except Exception:
-        p = None
-    return Path(p) if p else None
-
-
-def _wind_source_tail():
-    src = None
-    try:
-        log_path = os.path.join(P1.BASE_DIR, "monitor.log")
-        with open(log_path, "r", encoding="utf-8", errors="ignore") as lf:
-            tail = lf.readlines()[-800:]
-        for li in reversed(tail):
-            m = P1.REGEX["wind_src"].search(li)
-            if m:
-                src = m.group(1)
-                break
-    except Exception:
-        src = None
-    return src
-
-
 def gerar_html(
-    p, r, pc, rc, rot, raj, rcor, status,
-    wdir_aj, barometro, wdir_lbl,
-    vento_med=None, vento_cor="verde",
+    p,
+    r,
+    pc,
+    rc,
+    rot,
+    raj,
+    rcor,
+    status,
+    wdir_aj,
+    barometro,
+    wdir_lbl,
+    vento_med=None,
+    vento_cor="verde",
+    wind_source: Optional[str] = None,
 ):
     dt = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    dt_show = dt if not wind_source else f"{dt} <span style=\"font-size:.85em;opacity:.75\">(vento: {wind_source})</span>"
 
-    src = _wind_source_tail()
-    dt_show = dt if not src else f"""{dt} <span style="font-size:.85em;opacity:.75">(vento: {src})</span>"""
-
-    pitch_txt = _fmt_num(p, ".1f")
-    roll_txt = _fmt_num(r, ".1f")
-    raj_txt = _fmt_num(raj, ".2f")
-    vento_txt = _fmt_num(vento_med, ".1f")
-
-    wdir_txt = _fmt_num(wdir_aj, ".1f")
-    baro_txt = _fmt_num(barometro, ".2f")
+    wdir_txt = _fmt_or_dash(wdir_aj, "{:.1f}")
+    baro_txt = _fmt_or_dash(barometro, "{:.2f}")
     lbl_txt = "---" if (wdir_lbl is None or str(wdir_lbl).strip() == "") else str(wdir_lbl)
-
+    vento_txt = _fmt_or_dash(vento_med, "{:.1f}")
     last_epoch_ms = int(time.time() * 1000)
 
-    tpl_path = _template_path()
-    tpl_text = None
-    if tpl_path and tpl_path.exists():
+    template_path = Path(P1.FILES.get("html_template", ""))
+    if template_path and template_path.exists():
         try:
-            tpl_text = tpl_path.read_text(encoding="utf-8")
+            txt = template_path.read_text(encoding="utf-8")
+            if "$refresh_ms" in txt or "$stale_sec" in txt or "$last_epoch_ms" in txt:
+                tpl = Template(txt)
+                html = tpl.substitute(
+                    refresh_ms=P1.HTML_REFRESH_SEC * 1000,
+                    stale_sec=P1.HTML_STALE_MAX_AGE_SEC,
+                    last_epoch_ms=last_epoch_ms,
+                    port=P1.MUTE_CTRL_PORT,
+                    hora=dt_show,
+                    status_cor=status,
+                    rot=rot,
+                    pitch=_fmt_or_dash(p, "{:.1f}"),
+                    roll=_fmt_or_dash(r, "{:.1f}"),
+                    pitch_cor=pc,
+                    roll_cor=rc,
+                    rajada=_fmt_or_dash(raj, "{:.2f}"),
+                    rajada_cor=rcor,
+                    vento_med_txt=vento_txt,
+                    vento_cor=vento_cor,
+                    wdir_aj=wdir_txt,
+                    wdir_lbl=lbl_txt,
+                    barometro=baro_txt,
+                )
+                Path(P1.FILES["html"]).write_text(html, encoding="utf-8")
+                return
         except Exception:
-            tpl_text = None
+            P1.log.warning("Template externo inválido; usando fallback interno.", exc_info=True)
 
-    if not tpl_text:
-        # fallback mínimo (não “gigante”), só para não quebrar caso o template suma
-        tpl_text = """<!doctype html><html><head><meta charset="utf-8">
-<title>Pitch&Roll</title></head><body>
-<h1>$rot</h1>
-<p>Pitch: $pitch_txt | Roll: $roll_txt</p>
-<p>Vento: $vento_med_txt nós | Rajada: $rajada_txt nós</p>
-<p>Atualizado: $hora</p>
-</body></html>"""
-
-    html = Template(tpl_text).safe_substitute(
-        refresh_ms=str(int(P1.HTML_REFRESH_SEC * 1000)),
-        stale_sec=str(int(P1.HTML_STALE_MAX_AGE_SEC)),
-        last_epoch_ms=str(int(last_epoch_ms)),
-        port=str(int(P1.MUTE_CTRL_PORT)),
-
-        hora=str(dt_show),
-        status_cor=str(status),
-        rot=str(rot),
-
-        pitch_cor=str(pc),
-        roll_cor=str(rc),
-        pitch_txt=str(pitch_txt),
-        roll_txt=str(roll_txt),
-
-        rajada_txt=str(raj_txt),
-        rajada_cor=str(rcor),
-
-        vento_med_txt=str(vento_txt),
-        vento_cor=str(vento_cor),
-
-        wdir_aj=str(wdir_txt),
-        wdir_lbl=str(lbl_txt),
-        barometro=str(baro_txt),
-    )
-
-    Path(P1.FILES["html"]).write_text(html, encoding="utf-8")
+    with open(P1.FILES["html"], "w", encoding="utf-8") as f:
+        f.write(
+            HTML_TPL.format(
+                refresh_ms=P1.HTML_REFRESH_SEC * 1000,
+                stale_sec=P1.HTML_STALE_MAX_AGE_SEC,
+                last_epoch_ms=last_epoch_ms,
+                rot=rot,
+                pitch=p,
+                roll=r,
+                pitch_cor=pc,
+                roll_cor=rc,
+                rajada=raj,
+                rajada_cor=rcor,
+                vento_med_txt=vento_txt,
+                vento_cor=vento_cor,
+                status_cor=status,
+                wdir_aj=wdir_txt,
+                barometro=baro_txt,
+                wdir_lbl=lbl_txt,
+                hora=dt_show,
+                port=P1.MUTE_CTRL_PORT,
+            )
+        )
 
 
 def abrir_html_no_navegador():
@@ -454,3 +387,16 @@ def abrir_html_no_navegador():
         webbrowser.open(uri, new=0, autoraise=True)
     except Exception:
         pass
+
+
+__all__ = [
+    "AlarmState",
+    "alarm_state",
+    "is_muted_L23",
+    "start_control_server",
+    "merge_dados",
+    "gravar_refresh_token",
+    "refresh_html_now",
+    "gerar_html",
+    "abrir_html_no_navegador",
+]
