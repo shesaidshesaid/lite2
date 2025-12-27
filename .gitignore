@@ -1,8 +1,93 @@
+############################################
+# Python (bytecode, cache, build)
+############################################
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.pyi
+*.so
+
+############################################
+# Ambientes virtuais
+############################################
 venv/
 .venv/
-pitch_roll.html
+env/
+ENV/
+
+############################################
+# Logs e arquivos gerados em runtime
+############################################
+*.log
 monitor.log
 pitch_roll_log.txt
+
+############################################
+# HTML / JS gerados dinamicamente
+############################################
+pitch_roll.html
 refresh_token*.js
+
+############################################
+# Dumps, escutas e artefatos temporários
+############################################
+last_response.*
+last_script*.js
+HIT_*.js
+candidates*.txt
+*.bin
+*.tmp
+*.dump
+
+############################################
+# Dados temporários / cache de ferramentas
+############################################
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+############################################
+# IDEs / Editores
+############################################
+.vscode/
+.idea/
+*.code-workspace
+
+############################################
+# Sistema operacional
+############################################
+.DS_Store
+Thumbs.db
+desktop.ini
+
+############################################
+# Empacotamento / distribuição
+############################################
+build/
+dist/
+*.egg-info/
+
+############################################
+# Configurações sensíveis / locais
+############################################
+.env
+.env.*
+*.key
+*.pem
+*.crt
+*.pfx
+
+############################################
+# Arquivos de lock locais (se existirem)
+############################################
+*.lock
+
+############################################
+# Outros arquivos não versionáveis
+############################################
+*.bak
+*.old
+*.swp
+*.swo
