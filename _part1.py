@@ -79,6 +79,14 @@ KEYS_WIND = (
     "windspdauxmaxv",
     "windspdauxmean",   # <-- ADICIONE
     "windspdauxmax",    # <-- ADICIONE
+     "windspdmean",
+    "windspdmeanv",
+    "gustspdmax",
+    "gustspdmaxv",
+    "winddirmean",
+    "winddirmeanv",
+    "airpresslmeanv",
+    "airpresmeanv",
 )
 
 ES_CONTINUOUS, ES_SYSTEM_REQUIRED, ES_DISPLAY_REQUIRED = 0x80000000, 0x00000001, 0x00000002

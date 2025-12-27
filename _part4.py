@@ -157,16 +157,32 @@ def avaliar_por_valores(pitch_val, roll_val, raj_val):
 
 def avaliar_de_json(dados: dict):
     pitch_val = P2.soma_max_min_pitch(dados.get("ptchwnd", []), P1.HTML_WIN_PITCH)
-    roll_val = P2.soma_max_min_roll(dados.get("rollwnd", []), P1.HTML_WIN_ROLL)
+    roll_val  = P2.soma_max_min_roll(dados.get("rollwnd", []), P1.HTML_WIN_ROLL)
 
-    # Usa cadeia centralizada de leitura para seguir prioridades do PyHMS
-    vento_val = P2.vento_medio(dados)
-    raj_val = P2.rajada(dados)
+    # =========================
+    # VENTO – PyHMS (média 2 min REAL)
+    # =========================
+    vento_val = None
+    try:
+        vento_val = P1.safe_float(dados.get("windspdmean", {}).get("med. 2 min"))
+    except Exception:
+        pass
 
+    if vento_val is None:
+        vento_val = P1.safe_float(dados.get("windspdmeanv"))
+
+    # =========================
+    # RAJADA – PyHMS (gust max REAL)
+    # =========================
+    raj_val = P1.safe_float(dados.get("gustspdmaxv"))
+
+    if raj_val is None:
+        raj_val = P1.safe_float(dados.get("gustspdmax", {}).get("instantaneo op."))
 
     out = avaliar_por_valores(pitch_val, roll_val, raj_val)
 
     wdir_adj = P2.dir_vento_ajustada(dados)
+
     out.update(
         {
             "wdir_adj": wdir_adj,
@@ -178,6 +194,7 @@ def avaliar_de_json(dados: dict):
         }
     )
     return out
+
 
 
 __all__ = [
