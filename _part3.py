@@ -18,6 +18,9 @@ import _part5 as P5
 import threading
 
 
+STOP_EVENT = threading.Event()
+
+
 
 def ler_ultimo_do_log():
     """Retorna (pitch, roll, rajada) do último registro válido."""
@@ -31,7 +34,7 @@ def ler_ultimo_do_log():
                     p, r, w = m.groups()
                     return float(p), float(r), float(w)
     except Exception:
-        pass
+        P1.log.exception("Erro ao ler último registro do log")
     return None
 
 
@@ -57,29 +60,27 @@ def salvar_log(p, r, raj):
         with open(P1.FILES["log"], "w", encoding="utf-8") as f:
             f.write("\n".join(linhas) + "\n")
     except Exception:
-        pass
+        P1.log.exception("Erro ao salvar log")
 
 
 def encerrar_gracioso():
     """Para áudio e libera recursos do evento/quit."""
+    STOP_EVENT.set()
     try:
         if P1.CHANNELS.get("beep"):
             P1.CHANNELS["beep"].stop()
         if P1.CHANNELS.get("voz"):
             P1.CHANNELS["voz"].stop()
         if P1.audio_ok and P1.pygame is not None:
-            try:
-                P1.pygame.mixer.quit()
-            except Exception:
-                pass
+            P1.pygame.mixer.quit()
     except Exception:
-        pass
+        P1.log.debug("Erro ao encerrar mixer/áudio", exc_info=True)
     try:
         if P1._quit_evt:
             P1._quit_evt.close()
             P1._quit_evt = None
     except Exception:
-        pass
+        P1.log.debug("Erro ao fechar quit event", exc_info=True)
 
 
 def run_monitor():
@@ -87,7 +88,7 @@ def run_monitor():
         if not os.path.exists(P1.FILES["log"]):
             open(P1.FILES["log"], "w", encoding="utf-8").close()
     except Exception:
-        pass
+        P1.log.exception("Não foi possível preparar arquivo de log")
 
     def _coletar_merged():
         d_pr = P1.coletar_json(P1.URL_SMP_PITCH_ROLL)
@@ -96,7 +97,7 @@ def run_monitor():
 
     dados = None
     for _ in range(3):
-        if P1._quit_evt and P1._quit_evt.is_signaled():
+        if STOP_EVENT.is_set() or (P1._quit_evt and P1._quit_evt.is_signaled()):
             encerrar_gracioso()
             return
         dados = _coletar_merged()
@@ -174,7 +175,11 @@ def run_monitor():
                 P1.tocar_alarme_vento()
                 wind_alarm_state["last_wind_alarm_ts"] = now
 
-    threading.Timer(9.0, lambda: verificar_alarme_vento(est.get("vento_med"), est.get("raj"))).start()
+    wind_alarm_timer = threading.Timer(
+        9.0, lambda: verificar_alarme_vento(est.get("vento_med"), est.get("raj"))
+    )
+    wind_alarm_timer.daemon = True
+    wind_alarm_timer.start()
 
 
     def processar_alarme_pitch_roll(est_local):
@@ -183,9 +188,9 @@ def run_monitor():
 
     
 
-    while True:
+    while not STOP_EVENT.is_set():
         t0 = time.monotonic()
-        if P1._quit_evt and P1._quit_evt.is_signaled():
+        if STOP_EVENT.is_set() or (P1._quit_evt and P1._quit_evt.is_signaled()):
             encerrar_gracioso()
             return
         dados = _coletar_merged()
@@ -236,6 +241,9 @@ def run_monitor():
         else:
             time.sleep(rest)
 
+    if wind_alarm_timer.is_alive():
+        wind_alarm_timer.cancel()
+
 
 def _main():
     P1.keep_screen_on(True)
@@ -246,7 +254,8 @@ def _main():
 
     if args.stop:
         ok = P1.signal_quit()
-        print("OK, sinal enviado." if ok else "Nenhuma instância encontrada.")
+        msg = "OK, sinal enviado." if ok else "Nenhuma instância encontrada."
+        print(msg)
         sys.exit(0)
 
     ja_existe, _ = P1.obter_mutex()

@@ -79,16 +79,12 @@ KEYS_WIND = (
     "airpresmean",
     "windspdauxmeanv",
     "windspdauxmaxv",
-    "windspdauxmean",   # <-- ADICIONE
-    "windspdauxmax",    # <-- ADICIONE
-     "windspdmean",
+    "windspdauxmean",
+    "windspdauxmax",
+    "windspdmean",
     "windspdmeanv",
     "gustspdmax",
     "gustspdmaxv",
-    "winddirmean",
-    "winddirmeanv",
-    "airpresslmeanv",
-    "airpresmeanv",
 )
 
 ES_CONTINUOUS, ES_SYSTEM_REQUIRED, ES_DISPLAY_REQUIRED = 0x80000000, 0x00000001, 0x00000002
@@ -106,6 +102,13 @@ FILES = {
     "html_template": os.path.join(RESOURCE_ROOT, "pitch_roll_template.html"),
 }
 
+
+def ordered_wind_hosts(preferencia: Optional[str] = None):
+    """Retorna a ordem de hosts de vento, priorizando a preferência quando válida."""
+    if preferencia and preferencia in WIND_HOSTS_ORDER:
+        return [preferencia] + [h for h in WIND_HOSTS_ORDER if h != preferencia]
+    return list(WIND_HOSTS_ORDER)
+
 # =========================
 # Logging com rotação
 # =========================
@@ -113,16 +116,19 @@ LOG_FILE = os.path.join(BASE_DIR, "monitor.log")
 LOG_MAX_BYTES = 5 * 1024 * 1024   # 5 MB
 LOG_BACKUP_COUNT = 5              # mantém monitor.log.1 ... monitor.log.5
 
-def _setup_logging() -> None:
-    """Configura logging com rotação (idempotente)."""
-    root = logging.getLogger()
-    if getattr(root, "_pitchroll_logging_configured", False):
-        return
 
-    root.setLevel(logging.INFO)
+def _setup_logging() -> logging.Logger:
+    """Configura logging com rotação (idempotente) e devolve o logger nomeado."""
+    logger = logging.getLogger("painel")
+    if getattr(logger, "_pitchroll_logging_configured", False):
+        return logger
+
+    level_name = os.environ.get("PITCHROLL_LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logger.setLevel(level)
+    logger.propagate = False
 
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-
     handler = RotatingFileHandler(
         LOG_FILE,
         maxBytes=LOG_MAX_BYTES,
@@ -131,14 +137,14 @@ def _setup_logging() -> None:
     )
     handler.setFormatter(fmt)
 
-    # Evita duplicar handlers em cenários de reimport
-    root.handlers.clear()
-    root.addHandler(handler)
+    if not any(isinstance(h, RotatingFileHandler) for h in logger.handlers):
+        logger.addHandler(handler)
 
-    root._pitchroll_logging_configured = True
+    logger._pitchroll_logging_configured = True
+    return logger
 
-_setup_logging()
-log = logging.getLogger("painel")
+
+log = _setup_logging()
 
 
 REGEX = {
@@ -178,7 +184,7 @@ def keep_screen_on(enable: bool = True) -> None:
         flags = ES_CONTINUOUS | (ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED if enable else 0)
         ctypes.windll.kernel32.SetThreadExecutionState(flags)
     except Exception:
-        pass
+        log.debug("Falha ao ajustar SetThreadExecutionState", exc_info=True)
 
 
 # =========================
@@ -273,6 +279,7 @@ def coletar_json(url: str, tentativas: int = 3, timeout: int = 10):
             resp.raise_for_status()
             return resp.json()
         except Exception:
+            log.debug("Falha na tentativa %s para %s", tent + 1, url, exc_info=True)
             if tent == tentativas - 1:
                 log.warning("Falha ao coletar %s", url, exc_info=True)
                 return None
@@ -286,15 +293,24 @@ def coletar_json(url: str, tentativas: int = 3, timeout: int = 10):
 audio_ok, CHANNELS, _SND = True, {}, {}
 
 
-if pygame is None:
-    audio_ok = False
-else:
+def _init_audio() -> bool:
+    """Inicializa mixer/filas e devolve True/False indicando sucesso."""
+    global CHANNELS
+    if pygame is None:
+        log.info("Pygame não encontrado; seguindo sem áudio.")
+        return False
     try:
         pygame.mixer.init(frequency=44100, size=-16, channels=2)
         pygame.mixer.set_num_channels(4)
         CHANNELS = {name: pygame.mixer.Channel(i) for i, name in enumerate(["voz", "beep", "vento"])}
+        return True
     except Exception:
-        audio_ok = False
+        log.warning("Falha ao inicializar áudio; seguindo sem áudio.", exc_info=True)
+        CHANNELS = {}
+        return False
+
+
+audio_ok = _init_audio()
 
 
 def _carregar_wav(nome_base: str):
@@ -306,6 +322,7 @@ def _carregar_wav(nome_base: str):
         _SND[nome_base] = snd
         return snd
     except Exception:
+        log.warning("Falha ao carregar áudio %s", path, exc_info=True)
         return None
 
 
@@ -333,7 +350,7 @@ def _tocar_em_canal(nome_base: str, vol01: float, canal_nome: str):
         CHANNELS[canal_nome].play(snd)
         _esperar_canal(CHANNELS[canal_nome], max(1.5, snd.get_length() + 0.5))
     except Exception:
-        pass
+        log.warning("Erro ao tocar áudio %s", nome_base, exc_info=True)
 
 
 def tocar_alerta(nivel_num: int):
@@ -349,11 +366,8 @@ def tocar_alerta(nivel_num: int):
                 break
     if not snd:
         return
-    try:
-        vol = VOLUMES.get(f"beep_{nome}", VOLUMES["beep_fallback"])
-        _tocar_em_canal(nome, vol, "beep")
-    except Exception:
-        pass
+    vol = VOLUMES.get(f"beep_{nome}", VOLUMES["beep_fallback"])
+    _tocar_em_canal(nome, vol, "beep")
 
 
 _COMBO_MAP = {
@@ -501,6 +515,7 @@ __all__ = [
     "signal_quit",
     "obter_mutex",
     "coletar_json",
+    "ordered_wind_hosts",
     "tocar_alerta",
     "falar_wavs",
     "tocar_alarme_vento",
