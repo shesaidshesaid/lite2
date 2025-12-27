@@ -159,8 +159,9 @@ def avaliar_de_json(dados: dict):
     pitch_val = P2.soma_max_min_pitch(dados.get("ptchwnd", []), P1.HTML_WIN_PITCH)
     roll_val = P2.soma_max_min_roll(dados.get("rollwnd", []), P1.HTML_WIN_ROLL)
 
-    vento_val = P2.vento_medio_ui_aux(dados)
-    raj_val = P2.rajada_ui_aux(dados)
+    # Usa cadeia centralizada de leitura para seguir prioridades do PyHMS
+    vento_val = P2.vento_medio(dados)
+    raj_val = P2.rajada(dados)
 
 
     out = avaliar_por_valores(pitch_val, roll_val, raj_val)
