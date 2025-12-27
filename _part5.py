@@ -54,6 +54,7 @@ def _coletar_est_para_confirmacao():
 
         return P4.avaliar_de_json(dados)
     except Exception:
+        P1.log.exception("Falha ao confirmar leitura de alarme")
         return None
 
 

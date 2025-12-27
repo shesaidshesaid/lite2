@@ -129,15 +129,13 @@ def rajada_ui_aux(d):
 
 def coletar_wind_com_fallback(tentativas: int = 1, timeout: int = 10):
     wind_pref = getattr(P1, "WIND_PREF", None)
-    ordem = (
-        [wind_pref] + [h for h in P1.WIND_HOSTS_ORDER if h != wind_pref]
-        if wind_pref and wind_pref in P1.WIND_HOSTS_ORDER
-        else list(P1.WIND_HOSTS_ORDER)
-    )
+    ordem = P1.ordered_wind_hosts(wind_pref)
 
     for host in ordem:
-        d = P1.coletar_json(f"http://{host}:8509{P1.GET_PATH}", tentativas, timeout)
+        url = f"http://{host}:8509{P1.GET_PATH}"
+        d = P1.coletar_json(url, tentativas, timeout)
         if not d:
+            P1.log.warning("Host %s não respondeu dados de vento.", host)
             continue
         try:
             vm = vento_medio_ui_aux(d)
@@ -147,6 +145,7 @@ def coletar_wind_com_fallback(tentativas: int = 1, timeout: int = 10):
                 P1.log.info("Usando vento de %s (vm=%s, raj=%s).", host, vm, rj)
                 return d
         except Exception:
+            P1.log.exception("Erro interpretando vento de %s (prioritário)", host)
             continue
 
         try:
@@ -156,6 +155,7 @@ def coletar_wind_com_fallback(tentativas: int = 1, timeout: int = 10):
                 P1.log.info("Usando vento de %s (vm=%s, raj=%s).", host, vm, rj)
                 return d
         except Exception:
+            P1.log.exception("Erro interpretando vento de %s (fallback)", host)
             continue
     return None
 
