@@ -162,22 +162,12 @@ def avaliar_de_json(dados: dict):
     # =========================
     # VENTO – PyHMS (média 2 min REAL)
     # =========================
-    vento_val = None
-    try:
-        vento_val = P1.safe_float(dados.get("windspdmean", {}).get("med. 2 min"))
-    except Exception:
-        pass
-
-    if vento_val is None:
-        vento_val = P1.safe_float(dados.get("windspdmeanv"))
+    vento_val = P2.vento_medio(dados)
 
     # =========================
     # RAJADA – PyHMS (gust max REAL)
     # =========================
-    raj_val = P1.safe_float(dados.get("gustspdmaxv"))
-
-    if raj_val is None:
-        raj_val = P1.safe_float(dados.get("gustspdmax", {}).get("instantaneo op."))
+    raj_val = P2.rajada(dados)
 
     out = avaliar_por_valores(pitch_val, roll_val, raj_val)
 

@@ -9,11 +9,10 @@ import json
 import threading
 import time
 import webbrowser
-from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Deque, Dict, Optional
+from typing import Dict, Optional
 from urllib.parse import parse_qs, urlparse
 
 import _part1 as P1

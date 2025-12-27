@@ -131,32 +131,44 @@ def coletar_wind_com_fallback(tentativas: int = 1, timeout: int = 10):
     wind_pref = getattr(P1, "WIND_PREF", None)
     ordem = P1.ordered_wind_hosts(wind_pref)
 
+    algum_host_ok = False
     for host in ordem:
         url = f"http://{host}:8509{P1.GET_PATH}"
         d = P1.coletar_json(url, tentativas, timeout)
         if not d:
-            P1.log.warning("Host %s não respondeu dados de vento.", host)
+            P1.log.warning("Host %s (%s) sem dados de vento (falha HTTP/JSON).", host, url)
             continue
         try:
-            vm = vento_medio_ui_aux(d)
-            rj = rajada_ui_aux(d)
-            if vm is not None and rj is not None and float(vm) > 0 and float(rj) > 0:
-                d["_wind_source"] = host
-                P1.log.info("Usando vento de %s (vm=%s, raj=%s).", host, vm, rj)
-                return d
+            vm, rj = vento_medio(d), rajada(d)
         except Exception:
-            P1.log.exception("Erro interpretando vento de %s (prioritário)", host)
+            P1.log.exception("Erro interpretando vento de %s", host)
+            continue
+
+        if vm is None or rj is None:
+            P1.log.debug("Rejeitando vento de %s: valores ausentes (vm=%s, raj=%s)", host, vm, rj)
             continue
 
         try:
-            vm, rj = vento_medio(d), rajada(d)
-            if vm and rj and float(vm) > 0 and float(rj) > 0:
-                d["_wind_source"] = host
-                P1.log.info("Usando vento de %s (vm=%s, raj=%s).", host, vm, rj)
-                return d
+            vm_num, rj_num = float(vm), float(rj)
         except Exception:
-            P1.log.exception("Erro interpretando vento de %s (fallback)", host)
+            P1.log.debug("Rejeitando vento de %s: valores não numéricos (vm=%s, raj=%s)", host, vm, rj)
             continue
+
+        if not (math.isfinite(vm_num) and math.isfinite(rj_num)):
+            P1.log.debug("Rejeitando vento de %s: valores não finitos (vm=%s, raj=%s)", host, vm, rj)
+            continue
+
+        if vm_num <= 0 or rj_num <= 0:
+            P1.log.debug("Rejeitando vento de %s: valores não positivos (vm=%s, raj=%s)", host, vm, rj)
+            continue
+
+        algum_host_ok = True
+        d["_wind_source"] = host
+        P1.log.info("Usando vento de %s (vm=%s, raj=%s).", host, vm, rj)
+        return d
+
+    if not algum_host_ok:
+        P1.log.warning("Nenhum host de vento válido após tentar %s.", ", ".join(ordem))
     return None
 
 
