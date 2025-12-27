@@ -55,25 +55,23 @@ def rajada(d):
 
     Prioridade:
       1) gustspdmaxv (quando o backend preenche)
-      2) gustspdmax["instantaneo op."] (seu caso real)
-      3) gustspdmax["met. 3 sec"] (fallback)
-      4) cálculo antigo via windwnd (fallback final)
+      2) gustspdmax["instantaneo op."]
+      3) cálculo antigo via windwnd (fallback final)
     """
     # 1) valor "v" (quando existir)
     v = P1.safe_float(d.get("gustspdmaxv"))
     if v is not None:
         return v
 
-    # 2) dicionário completo
+    # 2) valor principal do dicionário completo
     g = d.get("gustspdmax")
     if isinstance(g, dict):
-        for k in ("instantaneo op.", "met. 3 sec", "met. 10 sec", "met. 60 sec", "met. 600 sec"):
-            if g.get(k) is not None:
-                v2 = P1.safe_float(g.get(k))
-                if v2 is not None:
-                    return v2
+        if g.get("instantaneo op.") is not None:
+            v2 = P1.safe_float(g.get("instantaneo op."))
+            if v2 is not None:
+                return v2
 
-    # 4) fallback antigo (se nada vier do PyHMS)
+    # 3) fallback antigo (se nada vier do PyHMS)
     w = _only_finite(d.get("windwnd", []))
     if not w:
         return 0.0
