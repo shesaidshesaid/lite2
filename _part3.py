@@ -19,6 +19,9 @@ import threading
 
 
 STOP_EVENT = threading.Event()
+_LOG_COMPACT_INTERVAL_SEC = 300  # 5 minutos
+_LOG_COMPACT_SIZE_BYTES = 512 * 1024
+_last_log_compact_ts = time.monotonic()
 
 
 
@@ -40,25 +43,48 @@ def ler_ultimo_do_log():
 
 def salvar_log(p, r, raj):
     """Mantém retenção de LOG_RETENCAO_HRS horas e adiciona a linha atual."""
+    global _last_log_compact_ts
     agora = datetime.now()
-    linhas = []
+    linha_atual = f"{agora.strftime('%H:%M %d/%m/%Y')};{float(p):.3f};{float(r):.3f};{float(raj):.2f}"
+
+    def _compactar():
+        linhas = []
+        try:
+            if os.path.exists(P1.FILES["log"]):
+                with open(P1.FILES["log"], "r", encoding="utf-8", errors="ignore") as f:
+                    for li in f:
+                        m = P1.REGEX["log_keep"].match(li)
+                        if not m:
+                            continue
+                        h, d = m.groups()
+                        try:
+                            ts = datetime.strptime(f"{h} {d}", "%H:%M %d/%m/%Y")
+                        except Exception:
+                            continue
+                        if ts >= agora - timedelta(hours=P1.LOG_RETENCAO_HRS):
+                            linhas.append(li.rstrip())
+            linhas.append(linha_atual)
+            with open(P1.FILES["log"], "w", encoding="utf-8") as f:
+                f.write("\n".join(linhas) + "\n")
+            return True
+        except Exception:
+            P1.log.warning("Falha ao compactar log; mantendo append.", exc_info=True)
+            return False
+
     try:
-        if os.path.exists(P1.FILES["log"]):
-            with open(P1.FILES["log"], "r", encoding="utf-8", errors="ignore") as f:
-                for li in f:
-                    m = P1.REGEX["log_keep"].match(li)
-                    if not m:
-                        continue
-                    h, d = m.groups()
-                    try:
-                        ts = datetime.strptime(f"{h} {d}", "%H:%M %d/%m/%Y")
-                    except Exception:
-                        continue
-                    if ts >= agora - timedelta(hours=P1.LOG_RETENCAO_HRS):
-                        linhas.append(li.rstrip())
-        linhas.append(f"{agora.strftime('%H:%M %d/%m/%Y')};{float(p):.3f};{float(r):.3f};{float(raj):.2f}")
-        with open(P1.FILES["log"], "w", encoding="utf-8") as f:
-            f.write("\n".join(linhas) + "\n")
+        need_compact = False
+        try:
+            need_compact = (time.monotonic() - _last_log_compact_ts) >= _LOG_COMPACT_INTERVAL_SEC
+            need_compact = need_compact or os.path.getsize(P1.FILES["log"]) > _LOG_COMPACT_SIZE_BYTES
+        except Exception:
+            need_compact = True
+
+        if need_compact and _compactar():
+            _last_log_compact_ts = time.monotonic()
+            return
+
+        with open(P1.FILES["log"], "a", encoding="utf-8") as f:
+            f.write(linha_atual + "\n")
     except Exception:
         P1.log.exception("Erro ao salvar log")
 
