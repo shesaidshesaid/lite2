@@ -16,6 +16,8 @@ import sys
 import time
 from ctypes import wintypes
 from typing import Optional
+from logging.handlers import RotatingFileHandler
+
 
 # =========================
 # Dependências opcionais
@@ -31,11 +33,9 @@ pygame = importlib.import_module("pygame") if pygame_spec else None
 # =========================
 HTML_REFRESH_SEC, HTML_STALE_MAX_AGE_SEC = 20, 40
 HTML_WIN_PITCH = HTML_WIN_ROLL = 39
-COLETA_INTERVAL = 20
+COLETA_INTERVAL = 10
 
-COOLDOWN_L2_MIN = 11
-COOLDOWN_L3_MIN = 10
-COOLDOWN_L4_MIN = 9
+
 INIBICAO_L3_SOBRE_L2_MIN = 11
 INIBICAO_L4_SOBRE_L23_MIN = 10
 RESET_ESTAVEL_CICLOS = 3
@@ -43,8 +43,8 @@ OSCILACAO_MAX_MUDANCAS = 5
 OSCILACAO_JANELA_MIN = 10
 AUTO_MUTE_OSCILACAO_MIN = 15
 
-RANDOM_INTERVAL_HOURS = 5
-RANDOM_SILENCE_PERIOD_MIN = 50
+RANDOM_INTERVAL_HOURS = 4
+RANDOM_SILENCE_PERIOD_MIN = 40
 
 VOLUMES = {"beep_l2": 0.07, "beep_l3": 0.09, "beep_l4": 0.15, "voz": 100, "beep_fallback": 0.07}
 FATOR_CORRECAO_PITCH = FATOR_CORRECAO_ROLL = 0.7
@@ -77,6 +77,8 @@ KEYS_WIND = (
     "airpresmean",
     "windspdauxmeanv",
     "windspdauxmaxv",
+    "windspdauxmean",   # <-- ADICIONE
+    "windspdauxmax",    # <-- ADICIONE
 )
 
 ES_CONTINUOUS, ES_SYSTEM_REQUIRED, ES_DISPLAY_REQUIRED = 0x80000000, 0x00000001, 0x00000002
@@ -94,12 +96,40 @@ FILES = {
     "html_template": os.path.join(RESOURCE_ROOT, "pitch_roll_template.html"),
 }
 
-logging.basicConfig(
-    filename="monitor.log",
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
+# =========================
+# Logging com rotação
+# =========================
+LOG_FILE = os.path.join(BASE_DIR, "monitor.log")
+LOG_MAX_BYTES = 5 * 1024 * 1024   # 5 MB
+LOG_BACKUP_COUNT = 5              # mantém monitor.log.1 ... monitor.log.5
+
+def _setup_logging() -> None:
+    """Configura logging com rotação (idempotente)."""
+    root = logging.getLogger()
+    if getattr(root, "_pitchroll_logging_configured", False):
+        return
+
+    root.setLevel(logging.INFO)
+
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+
+    handler = RotatingFileHandler(
+        LOG_FILE,
+        maxBytes=LOG_MAX_BYTES,
+        backupCount=LOG_BACKUP_COUNT,
+        encoding="utf-8",
+    )
+    handler.setFormatter(fmt)
+
+    # Evita duplicar handlers em cenários de reimport
+    root.handlers.clear()
+    root.addHandler(handler)
+
+    root._pitchroll_logging_configured = True
+
+_setup_logging()
 log = logging.getLogger("painel")
+
 
 REGEX = {
     "wind_src": re.compile(r"Usando\s+vento\s+(?:de|do|da)\s+([A-Za-z0-9._:\-]+)", re.IGNORECASE),
@@ -422,9 +452,6 @@ __all__ = [
     "HTML_WIN_PITCH",
     "HTML_WIN_ROLL",
     "COLETA_INTERVAL",
-    "COOLDOWN_L2_MIN",
-    "COOLDOWN_L3_MIN",
-    "COOLDOWN_L4_MIN",
     "INIBICAO_L3_SOBRE_L2_MIN",
     "INIBICAO_L4_SOBRE_L23_MIN",
     "RESET_ESTAVEL_CICLOS",

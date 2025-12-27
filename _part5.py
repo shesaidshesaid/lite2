@@ -13,7 +13,6 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from string import Template
 from typing import Deque, Dict, Optional
 from urllib.parse import parse_qs, urlparse
 
@@ -24,129 +23,179 @@ from _html_fallback import HTML_TPL
 
 
 # =========================================================
-# Alarm State
+# Alarm State (SIMPLIFICADO)
 # =========================================================
+
+ALARM_CONFIRM_SEC = 5.0
+ALARM_SILENCE_SEC = 8 * 60.0  # 8 minutos
+
+
+def _coletar_est_para_confirmacao():
+    """Coleta uma leitura 'agora' para confirmar nível (sem depender do loop de 20s)."""
+    try:
+        d_pr = P1.coletar_json(P1.URL_SMP_PITCH_ROLL, tentativas=1, timeout=5)
+        d_wind = P2.coletar_wind_com_fallback(tentativas=1, timeout=5)
+
+        if not d_pr and not d_wind:
+            return None
+
+        dados = {}
+        if d_pr:
+            for k in P1.KEYS_PR:
+                if k in d_pr:
+                    dados[k] = d_pr[k]
+
+        if d_wind:
+            for k in P1.KEYS_WIND:
+                if k in d_wind:
+                    dados[k] = d_wind[k]
+            if d_wind.get("_wind_source"):
+                dados["_wind_source"] = d_wind["_wind_source"]
+
+        return P4.avaliar_de_json(dados)
+    except Exception:
+        return None
+
+
+def _tocar_alarme_pitch_roll(nivel: int, est: dict) -> None:
+    """Toca beep + voz conforme direções ativas (>=L2)."""
+    cond = []
+    if est.get("pitch_nivel", 0) >= 2 and est.get("pitch_rot") != "NIVELADA":
+        cond.append(est["pitch_rot"])
+    if est.get("roll_nivel", 0) >= 2 and est.get("roll_rot") != "NIVELADA":
+        cond.append(est["roll_rot"])
+
+    P1.tocar_alerta(nivel)
+    P1.falar_wavs(cond, incluir_atencao=(nivel >= 3))
+    # força refresh imediato no navegador (token)
+    gravar_refresh_token()
+
+
 class AlarmState:
+    """
+    Regras:
+    - L0/L1: nunca toca
+    - L2/L3/L4: só toca quando subir (nivel_atual > nivel_anterior)
+    - Após tocar nível N: silêncio por 8min para qualquer nível <= N
+    - Antes de tocar: confirmação após 5s (recoleta); toca nível confirmado (>=2)
+    """
+
     def __init__(self):
-        self.historico_niveis: Deque = deque(maxlen=10)
         self.nivel_anterior = 0
+
+        # silêncio "até" (por níveis <= silence_level)
+        self.silence_level = 0
+        self.silence_until = 0.0
+
+        # confirmação pendente
+        self.confirm_pending = False
+        self._confirm_timer = None
+        self._lock = threading.Lock()
+
+        # mantém compatibilidade com o resto do runtime (random)
         self.ultimo_alarme_l2 = 0.0
         self.ultimo_alarme_l3 = 0.0
         self.ultimo_alarme_l4 = 0.0
-        self.ultimo_l3_inibe_l2 = 0.0
-        self.ultimo_l4_inibe_l23 = 0.0
-        self.mudancas_recentes: Deque = deque()
-        self.auto_mute_until = 0.0
-        self.ciclos_estaveis = 0
         self.ultimo_random = 0.0
 
-    def nivel_combinado(self, est):
+    def nivel_combinado(self, est: dict) -> int:
         return max(est.get("pitch_nivel", 0), est.get("roll_nivel", 0))
 
-    def detectar_direcao(self, nivel_atual):
-        if nivel_atual > self.nivel_anterior:
-            return "SUBINDO"
-        if nivel_atual < self.nivel_anterior:
-            return "DESCENDO"
-        return "ESTAVEL"
+    def _now(self) -> float:
+        return time.monotonic()
 
-    def eh_alarme_imediato(self, nivel_atual):
-        return self.detectar_direcao(nivel_atual) == "SUBINDO" and nivel_atual >= 2
+    def _is_silenced_locked(self, nivel: int, now: float) -> bool:
+        return (nivel >= 2) and (nivel <= self.silence_level) and (now < self.silence_until)
 
-    def verificar_cooldown(self, nivel):
-        agora = time.monotonic()
-        if nivel <= 2:
-            if (agora - self.ultimo_alarme_l2) < (P1.COOLDOWN_L2_MIN * 60):
-                return True
-            if (agora - self.ultimo_alarme_l3) < (P1.COOLDOWN_L3_MIN * 60):
-                return True
-            if (agora - self.ultimo_alarme_l4) < (P1.COOLDOWN_L4_MIN * 60):
-                return True
-        if nivel <= 3:
-            if (agora - self.ultimo_alarme_l3) < (P1.COOLDOWN_L3_MIN * 60):
-                return True
-            if (agora - self.ultimo_alarme_l4) < (P1.COOLDOWN_L4_MIN * 60):
-                return True
-        if nivel <= 4:
-            if (agora - self.ultimo_alarme_l4) < (P1.COOLDOWN_L4_MIN * 60):
-                return True
-        return False
-
-    def verificar_inibicao(self, nivel):
-        agora = time.monotonic()
+    def _apply_silence_locked(self, nivel: int, now: float) -> None:
+        self.silence_level = int(nivel)
+        self.silence_until = now + ALARM_SILENCE_SEC
         if nivel == 2:
-            inibido_l3 = (agora - self.ultimo_l3_inibe_l2) < (P1.INIBICAO_L3_SOBRE_L2_MIN * 60)
-            inibido_l4 = (agora - self.ultimo_l4_inibe_l23) < (P1.INIBICAO_L4_SOBRE_L23_MIN * 60)
-            return inibido_l3 or inibido_l4
-        if nivel == 3:
-            return (agora - self.ultimo_l4_inibe_l23) < (P1.INIBICAO_L4_SOBRE_L23_MIN * 60)
-        return False
-
-    def verificar_auto_mute(self):
-        return time.monotonic() < self.auto_mute_until
-
-    def detectar_oscilacao(self, nivel_atual):
-        agora = time.monotonic()
-        if nivel_atual != self.nivel_anterior:
-            self.mudancas_recentes.append((agora, nivel_atual))
-        janela_s = P1.OSCILACAO_JANELA_MIN * 60
-        self.mudancas_recentes = deque([(t, n) for t, n in self.mudancas_recentes if (agora - t) <= janela_s], maxlen=25)
-        if len(self.mudancas_recentes) >= P1.OSCILACAO_MAX_MUDANCAS:
-            self.auto_mute_until = agora + (P1.AUTO_MUTE_OSCILACAO_MIN * 60)
-            self.mudancas_recentes.clear()
-            return True
-        return False
-
-    def atualizar_historico(self, nivel_atual):
-        agora = time.monotonic()
-        self.historico_niveis.append((agora, nivel_atual))
-        if nivel_atual <= 1:
-            self.ciclos_estaveis += 1
-            if self.ciclos_estaveis >= P1.RESET_ESTAVEL_CICLOS:
-                self._reset_estado()
-        else:
-            self.ciclos_estaveis = 0
-        self.nivel_anterior = nivel_atual
-
-    def _reset_estado(self):
-        self.historico_niveis.clear()
-        self.mudancas_recentes.clear()
-        self.ciclos_estaveis = 0
-
-    def registrar_alarme_tocado(self, nivel):
-        agora = time.monotonic()
-        if nivel == 2:
-            self.ultimo_alarme_l2 = agora
+            self.ultimo_alarme_l2 = now
         elif nivel == 3:
-            self.ultimo_alarme_l3 = agora
-            self.ultimo_l3_inibe_l2 = agora
+            self.ultimo_alarme_l3 = now
         elif nivel == 4:
-            self.ultimo_alarme_l4 = agora
-            self.ultimo_l4_inibe_l23 = agora
+            self.ultimo_alarme_l4 = now
 
-    def deve_tocar_alarme(self, est):
-        nivel_atual = self.nivel_combinado(est)
-        if nivel_atual <= 1:
-            self.atualizar_historico(nivel_atual)
-            return False, None, "Nível baixo (L0/L1)"
-        if self.verificar_auto_mute():
-            self.atualizar_historico(nivel_atual)
-            return False, None, "Auto-mute ativo (oscilação)"
-        if self.detectar_oscilacao(nivel_atual):
-            self.atualizar_historico(nivel_atual)
-            return False, None, "Auto-mute ativado (oscilação detectada)"
-        if self.verificar_cooldown(nivel_atual):
-            self.atualizar_historico(nivel_atual)
-            return False, None, f"Cooldown L{nivel_atual} ativo"
-        if self.verificar_inibicao(nivel_atual):
-            self.atualizar_historico(nivel_atual)
-            return False, None, f"L{nivel_atual} inibido por nível superior"
-        motivo = "IMEDIATO (escalada %s→%s)" % (self.nivel_anterior, nivel_atual) if self.eh_alarme_imediato(nivel_atual) else f"Normal L{nivel_atual}"
-        self.atualizar_historico(nivel_atual)
-        return True, motivo, None
+    def maybe_schedule(self, est: dict) -> None:
+        """Chamado no loop principal a cada atualização 'normal'."""
+        nivel = self.nivel_combinado(est)
+        now = self._now()
+
+        with self._lock:
+            prev = self.nivel_anterior
+            self.nivel_anterior = nivel  # sempre atualiza a referência anterior
+
+            # L0/L1 nunca tocam
+            if nivel < 2:
+                return
+
+            # Só dispara quando SUBIR
+            if nivel <= prev:
+                return
+
+            # Se já existe confirmação em andamento, não empilha
+            if self.confirm_pending:
+                return
+
+            # Respeita silêncio (8 min) para <= nível silenciado
+            if self._is_silenced_locked(nivel, now):
+                return
+
+            # Mantém sua lógica atual de mute manual L2/L3 (L4 continua podendo tocar)
+            if nivel <= 3 and is_muted_L23():
+                return
+
+            # Agenda confirmação (5s)
+            self.confirm_pending = True
+            self._confirm_timer = threading.Timer(ALARM_CONFIRM_SEC, self._confirm_and_alarm)
+            self._confirm_timer.daemon = True
+            self._confirm_timer.start()
+
+    def _confirm_and_alarm(self) -> None:
+        try:
+            # se estiver encerrando, não toca nada
+            if P1._quit_evt and P1._quit_evt.is_signaled():
+                return
+
+            est2 = _coletar_est_para_confirmacao()
+            if not est2:
+                return
+
+            nivel2 = self.nivel_combinado(est2)
+
+            # confirmação caiu para L0/L1 -> não toca
+            if nivel2 < 2:
+                return
+
+            # respeita mute manual L2/L3 na confirmação também
+            if nivel2 <= 3 and is_muted_L23():
+                return
+
+            now = self._now()
+            with self._lock:
+                # silêncio é sagrado
+                if self._is_silenced_locked(nivel2, now):
+                    return
+
+                # aplica silêncio ANTES de tocar, para evitar duplicidade enquanto toca
+                self._apply_silence_locked(nivel2, now)
+
+            _tocar_alarme_pitch_roll(nivel2, est2)
+
+        finally:
+            with self._lock:
+                self.confirm_pending = False
+                self._confirm_timer = None
 
 
 alarm_state = AlarmState()
+
+
+def processar_alarme_pitch_roll(est: dict) -> None:
+    """Entry-point simples para o runtime chamar."""
+    alarm_state.maybe_schedule(est)
+
 
 
 # =========================================================
@@ -324,37 +373,12 @@ def gerar_html(
     lbl_txt = "---" if (wdir_lbl is None or str(wdir_lbl).strip() == "") else str(wdir_lbl)
     vento_txt = _fmt_or_dash(vento_med, "{:.1f}")
     last_epoch_ms = int(time.time() * 1000)
+    pitch_txt = _fmt_or_dash(p, "{:.1f}")
+    roll_txt = _fmt_or_dash(r, "{:.1f}")
+    rajada_txt = _fmt_or_dash(raj, "{:.2f}")
 
-    template_path = Path(P1.FILES.get("html_template", ""))
-    if template_path and template_path.exists():
-        try:
-            txt = template_path.read_text(encoding="utf-8")
-            if "$refresh_ms" in txt or "$stale_sec" in txt or "$last_epoch_ms" in txt:
-                tpl = Template(txt)
-                html = tpl.substitute(
-                    refresh_ms=P1.HTML_REFRESH_SEC * 1000,
-                    stale_sec=P1.HTML_STALE_MAX_AGE_SEC,
-                    last_epoch_ms=last_epoch_ms,
-                    port=P1.MUTE_CTRL_PORT,
-                    hora=dt_show,
-                    status_cor=status,
-                    rot=rot,
-                    pitch=_fmt_or_dash(p, "{:.1f}"),
-                    roll=_fmt_or_dash(r, "{:.1f}"),
-                    pitch_cor=pc,
-                    roll_cor=rc,
-                    rajada=_fmt_or_dash(raj, "{:.2f}"),
-                    rajada_cor=rcor,
-                    vento_med_txt=vento_txt,
-                    vento_cor=vento_cor,
-                    wdir_aj=wdir_txt,
-                    wdir_lbl=lbl_txt,
-                    barometro=baro_txt,
-                )
-                Path(P1.FILES["html"]).write_text(html, encoding="utf-8")
-                return
-        except Exception:
-            P1.log.warning("Template externo inválido; usando fallback interno.", exc_info=True)
+
+    
 
     with open(P1.FILES["html"], "w", encoding="utf-8") as f:
         f.write(
@@ -377,6 +401,10 @@ def gerar_html(
                 wdir_lbl=lbl_txt,
                 hora=dt_show,
                 port=P1.MUTE_CTRL_PORT,
+                pitch_txt=pitch_txt,
+                roll_txt=roll_txt,
+                rajada_txt=rajada_txt,
+
             )
         )
 

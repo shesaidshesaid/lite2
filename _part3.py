@@ -176,23 +176,12 @@ def run_monitor():
 
     threading.Timer(9.0, lambda: verificar_alarme_vento(est.get("vento_med"), est.get("raj"))).start()
 
+
     def processar_alarme_pitch_roll(est_local):
-        nivel_atual = P5.alarm_state.nivel_combinado(est_local)
-        if nivel_atual <= 3 and P5.is_muted_L23():
-            return
-        deve_tocar, _motivo_ok, _motivo_nao = P5.alarm_state.deve_tocar_alarme(est_local)
-        if not deve_tocar:
-            return
-        cond = []
-        if est_local.get("pitch_nivel", 0) >= 2 and est_local.get("pitch_rot") != "NIVELADA":
-            cond.append(est_local["pitch_rot"])
-        if est_local.get("roll_nivel", 0) >= 2 and est_local.get("roll_rot") != "NIVELADA":
-            cond.append(est_local["roll_rot"])
-        P1.tocar_alerta(nivel_atual)
-        incluir_atencao = nivel_atual >= 3
-        P1.falar_wavs(cond, incluir_atencao=incluir_atencao)
-        P5.alarm_state.registrar_alarme_tocado(nivel_atual)
-        P5.gravar_refresh_token()
+        P5.processar_alarme_pitch_roll(est_local)
+
+
+    
 
     while True:
         t0 = time.monotonic()

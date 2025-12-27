@@ -46,10 +46,34 @@ def soma_max_min_roll(arr, n=None):
 
 
 # =========================================================
-# Vento (cálculos)
+# Vento (cálculos)  <-- AGORA USANDO OS CAMPOS DA UI (PyHMS)
 # =========================================================
 
 def rajada(d):
+    """
+    Rajada máxima (gust max) como a UI do PyHMS apresenta.
+
+    Prioridade:
+      1) gustspdmaxv (quando o backend preenche)
+      2) gustspdmax["instantaneo op."] (seu caso real)
+      3) gustspdmax["met. 3 sec"] (fallback)
+      4) cálculo antigo via windwnd (fallback final)
+    """
+    # 1) valor "v" (quando existir)
+    v = P1.safe_float(d.get("gustspdmaxv"))
+    if v is not None:
+        return v
+
+    # 2) dicionário completo
+    g = d.get("gustspdmax")
+    if isinstance(g, dict):
+        for k in ("instantaneo op.", "met. 3 sec", "met. 10 sec", "met. 60 sec", "met. 600 sec"):
+            if g.get(k) is not None:
+                v2 = P1.safe_float(g.get(k))
+                if v2 is not None:
+                    return v2
+
+    # 4) fallback antigo (se nada vier do PyHMS)
     w = _only_finite(d.get("windwnd", []))
     if not w:
         return 0.0
@@ -59,6 +83,25 @@ def rajada(d):
 
 
 def vento_medio(d):
+    """
+    Vento médio 2 min como a UI do PyHMS apresenta.
+
+    Prioridade:
+      1) windspdmean["med. 2 min"]
+      2) windspdmeanv (valor já escolhido no sistema)
+      3) cálculo antigo via windwnd (fallback)
+    """
+    m = d.get("windspdmean")
+    if isinstance(m, dict) and m.get("med. 2 min") is not None:
+        v = P1.safe_float(m.get("med. 2 min"))
+        if v is not None:
+            return v
+
+    v2 = P1.safe_float(d.get("windspdmeanv"))
+    if v2 is not None:
+        return v2
+
+    # fallback antigo
     w = _only_finite(d.get("windwnd", []))
     if not w:
         return None
@@ -66,27 +109,20 @@ def vento_medio(d):
     return (sum(tail) / len(tail)) if tail else None
 
 
-def _valor_auxiliar(d, chave_imediata, chave_dict, fallback_fn):
-    v = P1.safe_float(d.get(chave_imediata))
-    if v is not None:
-        return v
-    try:
-        spl = d.get("windsplv") or "med. 2 min"
-        m = d.get(chave_dict)
-        if isinstance(m, dict) and m.get(spl) is not None:
-            v2 = P1.safe_float(m[spl])
-            return v2 if v2 is not None else fallback_fn(d)
-    except Exception:
-        pass
-    return fallback_fn(d)
-
-
 def vento_medio_ui_aux(d):
-    return _valor_auxiliar(d, "windspdauxmeanv", "windspdauxmean", vento_medio)
+    """
+    Mantive o nome pra não quebrar o projeto.
+    Agora, este AUX também aponta para a leitura correta do PyHMS.
+    """
+    return vento_medio(d)
 
 
 def rajada_ui_aux(d):
-    return _valor_auxiliar(d, "windspdauxmaxv", "windspdauxmax", rajada)
+    """
+    Mantive o nome pra não quebrar o projeto.
+    Agora, este AUX também aponta para a leitura correta do PyHMS.
+    """
+    return rajada(d)
 
 
 # =========================================================
@@ -105,9 +141,16 @@ def coletar_wind_com_fallback(tentativas: int = 1, timeout: int = 10):
         d = P1.coletar_json(f"http://{host}:8509{P1.GET_PATH}", tentativas, timeout)
         if not d:
             continue
-        serie = _only_finite(d.get("windwnd", []))
-        if not serie:
+        try:
+            vm = vento_medio_ui_aux(d)
+            rj = rajada_ui_aux(d)
+            if vm is not None and rj is not None and float(vm) > 0 and float(rj) > 0:
+                d["_wind_source"] = host
+                P1.log.info("Usando vento de %s (vm=%s, raj=%s).", host, vm, rj)
+                return d
+        except Exception:
             continue
+
         try:
             vm, rj = vento_medio(d), rajada(d)
             if vm and rj and float(vm) > 0 and float(rj) > 0:

@@ -232,14 +232,12 @@ body {{
 .main-values {{
     font-size: calc(1.35rem * 2.5);
     color: #555;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-    align-items: center;
-    justify-items: center;
-    margin-top: 1.4rem;
+    margin-bottom: 1rem;
+    line-height: 1.7;
+    transform: translateY(calc(3 * var(--z-unit)));
 }}
-.main-values span {{ display: block; padding: 0.5rem 1.2rem; background: #f6f7fb; border-radius: 0.8rem; box-shadow: inset 0 0 0 1px rgba(0,0,0,.04); }}
+.main-values strong {{ display: block; }}
+
 
 .main-time {{
     font-size: 1rem;
@@ -323,7 +321,7 @@ body {{
                 <strong class="{vento_cor}"><span class="vento-valor">{vento_med_txt}</span> nós</strong>
             </div>
             <div><span class="rajada-label">Rajada</span>:
-                <strong class="{rajada_cor}"><span class="rajada-valor">{rajada:.2f}</span> nós</strong>
+                <strong class="{rajada_cor}"><span class="rajada-valor">{rajada_txt}</span> nós</strong>
             </div>
         </div>
     </div>
@@ -339,8 +337,9 @@ body {{
         <h1 class="main-title">⚓ Monitoramento de Pitch & Roll</h1>
         <div class="main-status">{rot}</div>
         <div class="main-values">
-            <strong><span class="{pitch_cor}">Pitch: {pitch:.1f}</span></strong>
-            <strong><span class="{roll_cor}">Roll: {roll:.1f}</span></strong>
+            <strong><span class="{pitch_cor}">Pitch: {pitch_txt}</span></strong>
+            <strong><span class="{roll_cor}">Roll: {roll_txt}</span></strong>
+
         </div>
         <div class="main-time">🕒 Atualizado em: {hora}</div>
     </div>
