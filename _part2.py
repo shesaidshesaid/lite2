@@ -132,6 +132,7 @@ def coletar_wind_com_fallback(tentativas: int = 1, timeout: int = 10):
     ordem = P1.ordered_wind_hosts(wind_pref)
 
     algum_host_ok = False
+    rejeicoes = []
     for host in ordem:
         url = f"http://{host}:8509{P1.GET_PATH}"
         d = P1.coletar_json(url, tentativas, timeout)
@@ -146,20 +147,24 @@ def coletar_wind_com_fallback(tentativas: int = 1, timeout: int = 10):
 
         if vm is None or rj is None:
             P1.log.debug("Rejeitando vento de %s: valores ausentes (vm=%s, raj=%s)", host, vm, rj)
+            rejeicoes.append((host, "valores ausentes"))
             continue
 
         try:
             vm_num, rj_num = float(vm), float(rj)
         except Exception:
             P1.log.debug("Rejeitando vento de %s: valores não numéricos (vm=%s, raj=%s)", host, vm, rj)
+            rejeicoes.append((host, "valores não numéricos"))
             continue
 
         if not (math.isfinite(vm_num) and math.isfinite(rj_num)):
             P1.log.debug("Rejeitando vento de %s: valores não finitos (vm=%s, raj=%s)", host, vm, rj)
+            rejeicoes.append((host, "valores não finitos"))
             continue
 
         if vm_num <= 0 or rj_num <= 0:
             P1.log.debug("Rejeitando vento de %s: valores não positivos (vm=%s, raj=%s)", host, vm, rj)
+            rejeicoes.append((host, "valores não positivos"))
             continue
 
         algum_host_ok = True
@@ -168,6 +173,9 @@ def coletar_wind_com_fallback(tentativas: int = 1, timeout: int = 10):
         return d
 
     if not algum_host_ok:
+        if rejeicoes:
+            resumo = ", ".join(f"{h} ({motivo})" for h, motivo in rejeicoes)
+            P1.log.info("Hosts com dados de vento rejeitados: %s", resumo)
         P1.log.warning("Nenhum host de vento válido após tentar %s.", ", ".join(ordem))
     return None
 

@@ -163,7 +163,6 @@ def run_monitor():
                 "wind_source": None,
             }
 
-    P5.gravar_refresh_token()
     P5.gerar_html(
         est["pitch_val"],
         est["roll_val"],
