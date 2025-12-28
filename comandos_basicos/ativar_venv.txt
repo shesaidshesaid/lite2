@@ -148,3 +148,281 @@ scripts ✔️
 **********************************
 
 
+
+
+
+
+
+************************************************************************
+***************************************************************************
+
+
+
+PASSO A PASSO — SAVE POINT OFICIAL
+1️⃣ Garanta que tudo está limpo
+
+No terminal do VS Code:
+
+git status
+
+
+Você deve ver:
+
+nothing to commit, working tree clean
+
+
+Se não estiver limpo:
+
+git add .
+git commit -m "WIP: ajustes locais antes de save point"
+
+2️⃣ Crie o commit de “versão estável”
+
+Esse commit representa uma versão funcional conhecida.
+
+git commit -m "STABLE: monitor funcional (vento/rajada corretos no HTML)"
+
+
+📌 Dica:
+
+Sempre comece com STABLE: ou BASELINE:
+
+A mensagem deve dizer por que essa versão é boa
+
+3️⃣ Crie uma TAG (o verdadeiro save point)
+
+Agora você nomeia essa versão:
+
+git tag -a v2025-01-27-html-ok -m "Versão estável com vento e rajada corretos no HTML"
+
+
+👉 Isso cria um marco imutável.
+
+4️⃣ Envie tudo para o GitHub (backup externo)
+git push origin main
+git push origin v2025-01-27-html-ok
+
+
+🔐 Pronto:
+
+Está salvo localmente
+
+Está salvo no GitHub
+
+Pode errar sem medo
+
+COMO USAR ISSO COM O CODEX (fluxo correto)
+Antes do Codex mexer
+git checkout main
+git pull
+
+
+Confirme que está na versão certa:
+
+git describe --tags
+
+
+
+
+
+
+
+COMO RESTAURAR UMA VERSÃO ANTIGA (o mais importante)
+🔙 Voltar para um save point
+git checkout v2025-01-27-html-ok
+
+
+👉 O código volta exatamente para aquele estado.
+
+Se quiser continuar a partir dali:
+
+git checkout -b hotfix-a-partir-da-estavel
+
+🧯 Emergência: voltar a main para uma versão estável
+git reset --hard v2025-01-27-html-ok
+git push origin main --force
+
+
+⚠️ Só faça isso se você for o único desenvolvedor (parece ser o caso).
+
+COMO FAZER ISSO PELO VS CODE (sem decorar comandos)
+Criar tag pelo VS Code
+
+Ctrl + Shift + P
+
+Digite: Git: Create Tag
+
+Nome: v2025-01-27-html-ok
+
+Mensagem: versão estável etc.
+
+Ver tags
+
+Source Control → … → View → Tags
+
+PADRÃO DE NOMES (use sempre)
+
+Tags
+
+vYYYY-MM-DD-descricao-curta
+
+
+Exemplos:
+
+v2025-01-27-html-ok
+v2025-01-28-alarmes-l234-estaveis
+v2025-01-29-pre-exe-build
+
+
+Commits
+
+STABLE: descrição
+CODEX: descrição
+HOTFIX: descrição
+
+Resumo final (guarde isso)
+
+✔️ Commit = foto
+✔️ Tag = nome da foto
+✔️ Nunca rodar Codex sem branch
+✔️ Sempre criar tag antes
+✔️ Smoke test simples > testes complexos
+✔️ Você sempre tem como voltar
+
+Se quiser, no próximo passo eu posso te entregar:
+
+um checklist de 30 segundos antes de rodar Codex
+
+ou um template fixo de mensagens de commit/tag
+
+ou um fluxo “pré-executável” (antes de gerar o .exe)
+
+Você agora está trabalhando como engenharia de software de produção, não mais “tentativa e erro”.
+
+
+
+
+
+
+
+
+
+
+
+Perfeito 👍
+Agora vamos direto ao ponto, do jeito mais seguro e repetível possível.
+
+✅ Situação atual (confirmando)
+
+Você já fez o merge no GitHub (via botão ou CLI).
+
+O branch main no GitHub já contém as mudanças.
+
+Seu VS Code/local ainda está com a versão antiga.
+
+👉 O que falta é sincronizar o main local com o main remoto.
+
+✅ Forma CORRETA e segura de puxar para o VS Code
+
+No terminal do VS Code (ou PowerShell), dentro da pasta do projeto:
+
+1️⃣ Garanta que você está no main
+git checkout main
+
+
+Você deve ver algo como:
+
+Switched to branch 'main'
+Your branch is behind 'origin/main' by X commits
+
+
+ou
+
+Your branch is up to date
+
+2️⃣ Puxe as mudanças do GitHub
+git pull origin main
+
+
+✔️ Isso:
+
+baixa o código novo
+
+atualiza seus arquivos locais
+
+não perde nada
+
+não sobrescreve histórico
+
+3️⃣ Confirme que está tudo sincronizado
+git status
+
+
+Resultado esperado:
+
+On branch main
+Your branch is up to date with 'origin/main'.
+
+nothing to commit, working tree clean
+
+
+👉 Pronto. O VS Code já está com o código novo.
+
+🧠 O que aconteceu “por baixo dos panos”
+
+Quando você apertou Merge no GitHub:
+
+O main remoto mudou
+
+Seu main local não muda sozinho
+
+git pull = git fetch + git merge
+
+Agora os dois estão alinhados
+
+🚨 E se der conflito?
+
+No seu caso:
+
+❌ Não ocorre conflito
+
+❌ Você não estava editando os mesmos arquivos localmente
+
+✔️ O merge já foi resolvido no GitHub
+
+Então git pull é 100% seguro aqui.
+
+🧩 Alternativa pelo VS Code (interface gráfica)
+
+Se preferir sem terminal:
+
+Abra o VS Code
+
+Vá em Source Control (Ctrl+Shift+G)
+
+Clique em ⋯ (três pontos)
+
+Clique em Pull
+
+Mas recomendo decorar o comando, como você pediu.
+
+🧱 Comando único (para decorar)
+
+Sempre que fizer merge no GitHub:
+
+git checkout main && git pull origin main
+
+
+Esse é o mantra.
+
+🔐 Regra de ouro (grave isso)
+
+Merge no GitHub ≠ código no seu PC
+
+Só existe código atualizado localmente depois de git pull
+
+
+
+
+
+

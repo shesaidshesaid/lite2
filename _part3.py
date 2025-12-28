@@ -214,8 +214,13 @@ def run_monitor():
 
     
 
+    now_boot = time.monotonic()
+    if not hasattr(P5.alarm_state, "ultimo_random") or P5.alarm_state.ultimo_random <= 0:
+        P5.alarm_state.ultimo_random = now_boot
+
     while not STOP_EVENT.is_set():
         t0 = time.monotonic()
+
         if STOP_EVENT.is_set() or (P1._quit_evt and P1._quit_evt.is_signaled()):
             encerrar_gracioso()
             return
