@@ -31,9 +31,9 @@ pygame = importlib.import_module("pygame") if pygame_spec else None
 # =========================
 # Constantes
 # =========================
-HTML_REFRESH_SEC, HTML_STALE_MAX_AGE_SEC = 20, 40
+HTML_REFRESH_SEC, HTML_STALE_MAX_AGE_SEC = 10, 40
 HTML_WIN_PITCH = HTML_WIN_ROLL = 39
-COLETA_INTERVAL = 10
+COLETA_INTERVAL = 9
 
 
 
