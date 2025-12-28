@@ -67,8 +67,6 @@ def _tocar_alarme_pitch_roll(nivel: int, est: dict) -> None:
 
     P1.tocar_alerta(nivel)
     P1.falar_wavs(cond, incluir_atencao=(nivel >= 3))
-    # força refresh imediato no navegador (token)
-    gravar_refresh_token()
 
 
 class AlarmState:
@@ -225,7 +223,7 @@ def _clear_mute_L23():
 
 
 # =========================================================
-# Merge + refresh_token
+# Merge helpers
 # =========================================================
 
 def merge_dados(d_pr: Optional[Dict], d_wind: Optional[Dict]):
@@ -245,21 +243,11 @@ def merge_dados(d_pr: Optional[Dict], d_wind: Optional[Dict]):
     return dados
 
 
-def gravar_refresh_token():
-    try:
-        tok = str(int(time.time() * 1000))
-        Path(P1.FILES["refresh_js"]).write_text(f"window.__REFRESH_TOKEN__='{tok}';", encoding="utf-8")
-        return tok
-    except Exception:
-        return None
-
-
 def refresh_html_now():
     try:
         d_pr = P1.coletar_json(P1.URL_SMP_PITCH_ROLL, tentativas=1, timeout=5)
         d_wind = P2.coletar_wind_com_fallback(tentativas=1, timeout=5)
         if not d_pr and not d_wind:
-            gravar_refresh_token()
             return False
         dados = merge_dados(d_pr, d_wind)
         est = P4.avaliar_de_json(dados)
@@ -279,10 +267,8 @@ def refresh_html_now():
             est.get("vento_cor", "verde"),
             est.get("wind_source"),
         )
-        gravar_refresh_token()
         return True
     except Exception:
-        gravar_refresh_token()
         return False
 
 
@@ -380,33 +366,36 @@ def gerar_html(
 
     
 
-    with open(P1.FILES["html"], "w", encoding="utf-8") as f:
-        f.write(
-            HTML_TPL.format(
-                refresh_ms=P1.HTML_REFRESH_SEC * 1000,
-                stale_sec=P1.HTML_STALE_MAX_AGE_SEC,
-                last_epoch_ms=last_epoch_ms,
-                rot=rot,
-                pitch=p,
-                roll=r,
-                pitch_cor=pc,
-                roll_cor=rc,
-                rajada=raj,
-                rajada_cor=rcor,
-                vento_med_txt=vento_txt,
-                vento_cor=vento_cor,
-                status_cor=status,
-                wdir_aj=wdir_txt,
-                barometro=baro_txt,
-                wdir_lbl=lbl_txt,
-                hora=dt_show,
-                port=P1.MUTE_CTRL_PORT,
-                pitch_txt=pitch_txt,
-                roll_txt=roll_txt,
-                rajada_txt=rajada_txt,
+    try:
+        with open(P1.FILES["html"], "w", encoding="utf-8") as f:
+            f.write(
+                HTML_TPL.format(
+                    refresh_ms=P1.HTML_REFRESH_SEC * 1000,
+                    stale_sec=P1.HTML_STALE_MAX_AGE_SEC,
+                    last_epoch_ms=last_epoch_ms,
+                    rot=rot,
+                    pitch=p,
+                    roll=r,
+                    pitch_cor=pc,
+                    roll_cor=rc,
+                    rajada=raj,
+                    rajada_cor=rcor,
+                    vento_med_txt=vento_txt,
+                    vento_cor=vento_cor,
+                    status_cor=status,
+                    wdir_aj=wdir_txt,
+                    barometro=baro_txt,
+                    wdir_lbl=lbl_txt,
+                    hora=dt_show,
+                    port=P1.MUTE_CTRL_PORT,
+                    pitch_txt=pitch_txt,
+                    roll_txt=roll_txt,
+                    rajada_txt=rajada_txt,
 
+                )
             )
-        )
+    except Exception:
+        P1.log.exception("Falha ao gravar HTML em %s", P1.FILES.get("html"))
 
 
 def abrir_html_no_navegador():
@@ -423,7 +412,6 @@ __all__ = [
     "is_muted_L23",
     "start_control_server",
     "merge_dados",
-    "gravar_refresh_token",
     "refresh_html_now",
     "gerar_html",
     "abrir_html_no_navegador",

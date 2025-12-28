@@ -12,26 +12,6 @@ HTML_TPL = """<!DOCTYPE html>
 
 <script>
 setTimeout(()=>location.reload(true),{refresh_ms});
-(function(){{
-    let last = null;
-    function tick(){{
-        const s = document.createElement('script');
-        s.src = 'refresh_token.js?ts=' + Date.now();
-        s.onload = function(){{
-            try {{
-                const cur = window.__REFRESH_TOKEN__;
-                if (last !== null && cur !== last) location.reload(true);
-                last = cur;
-            }} catch(e){{}}
-            setTimeout(tick, 1500);
-        }};
-        s.onerror = function(){{ setTimeout(tick, 1500); }};
-        document.head.appendChild(s);
-        setTimeout(()=>s.remove(), 2000);
-    }}
-    tick();
-}})();
-
 const STALE_SEC = {stale_sec};
 const LAST_EPOCH_MS = {last_epoch_ms};
 function stalenessLoop() {{

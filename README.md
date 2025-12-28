@@ -29,7 +29,7 @@ pip install -r requirements.txt
 - O painel gera `pitch_roll.html` na raiz do projeto.
 - Se existir `pitch_roll_template.html` com placeholders `$...`, ele será usado com `Template.substitute`.
 - Em caso de erro ou ausência, o HTML interno é usado automaticamente.
-- `refresh_token.js` é gravado junto ao HTML para detecção de mudanças.
+- O painel recarrega sozinho a cada ~10 segundos (`refresh_ms`).
 
 ## Notas
 - Compatível com Windows (mutex + quit event para instância única).

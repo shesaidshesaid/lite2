@@ -98,7 +98,6 @@ AUDIO_DIR = os.path.join(RESOURCE_ROOT, "audioss")
 FILES = {
     "log": os.path.join(BASE_DIR, "pitch_roll_log.txt"),
     "html": os.path.join(BASE_DIR, "pitch_roll.html"),
-    "refresh_js": os.path.join(BASE_DIR, "refresh_token.js"),
     "html_template": os.path.join(RESOURCE_ROOT, "pitch_roll_template.html"),
 }
 
