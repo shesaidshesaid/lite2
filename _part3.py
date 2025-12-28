@@ -93,10 +93,10 @@ def encerrar_gracioso():
     """Para áudio e libera recursos do evento/quit."""
     STOP_EVENT.set()
     try:
-        if P1.CHANNELS.get("beep"):
-            P1.CHANNELS["beep"].stop()
-        if P1.CHANNELS.get("voz"):
-            P1.CHANNELS["voz"].stop()
+        for nm in ("beep", "voz", "vento"):
+            canal = P1.CHANNELS.get(nm)
+            if canal:
+                canal.stop()
         if P1.audio_ok and P1.pygame is not None:
             P1.pygame.mixer.quit()
     except Exception:
@@ -303,6 +303,8 @@ def _main():
 
     try:
         run_monitor()
+    except KeyboardInterrupt:
+        P1.log.info("Interrompido por KeyboardInterrupt; encerrando.")
     finally:
         encerrar_gracioso()
 
