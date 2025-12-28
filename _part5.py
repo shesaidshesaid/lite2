@@ -65,8 +65,11 @@ def _tocar_alarme_pitch_roll(nivel: int, est: dict) -> None:
     if est.get("roll_nivel", 0) >= 2 and est.get("roll_rot") != "NIVELADA":
         cond.append(est["roll_rot"])
 
-    P1.tocar_alerta(nivel)
-    P1.falar_wavs(cond, incluir_atencao=(nivel >= 3))
+    def _seq():
+        P1.tocar_alerta(nivel)
+        P1.falar_wavs(cond, incluir_atencao=(nivel >= 3))
+
+    P1.run_audio_sequence(_seq, nome="pitch_roll")
 
 
 class AlarmState:

@@ -13,6 +13,7 @@ import math
 import os
 import re
 import sys
+import threading
 import time
 from ctypes import wintypes
 from typing import Optional
@@ -289,6 +290,8 @@ def coletar_json(url: str, tentativas: int = 3, timeout: int = 10):
 # Audio
 # =========================
 audio_ok, CHANNELS, _SND = True, {}, {}
+AUDIO_SEQ_LOCK = threading.RLock()
+_ACTIVE_AUDIO_SEQ = None
 
 
 def _init_audio() -> bool:
@@ -309,6 +312,53 @@ def _init_audio() -> bool:
 
 
 audio_ok = _init_audio()
+
+
+def _any_channel_busy() -> bool:
+    for ch in CHANNELS.values():
+        try:
+            if ch and ch.get_busy():
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _wait_all_channels_free(timeout_s: float) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while _any_channel_busy():
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.01)
+    return True
+
+
+def run_audio_sequence(seq_callable, nome: str = "audio_seq", timeout_s: float = 7.0) -> bool:
+    """Executa uma sequência de áudio de forma serializada e atômica."""
+
+    seq_name = nome or getattr(seq_callable, "__name__", "audio_seq")
+    start_wait = time.monotonic()
+    acquired = AUDIO_SEQ_LOCK.acquire(timeout=timeout_s)
+    if not acquired:
+        log.warning("AudioSeq %s cancelado: timeout aguardando sequência atual.", seq_name)
+        return False
+
+    global _ACTIVE_AUDIO_SEQ
+    _ACTIVE_AUDIO_SEQ = seq_name
+    log.info("AudioSeq START %s", seq_name)
+
+    try:
+        elapsed = time.monotonic() - start_wait
+        remaining = max(0.0, timeout_s - elapsed)
+        if not _wait_all_channels_free(remaining):
+            log.warning("AudioSeq %s cancelado: canais ocupados.", seq_name)
+            return False
+        seq_callable()
+        return True
+    finally:
+        log.info("AudioSeq END %s", seq_name)
+        _ACTIVE_AUDIO_SEQ = None
+        AUDIO_SEQ_LOCK.release()
 
 
 def _carregar_wav(nome_base: str):
@@ -421,41 +471,47 @@ def falar_wavs(direcoes, incluir_atencao: bool):
 
 
 def tocar_alarme_vento():
-    if not audio_ok:
-        return
-    canal = CHANNELS.get("vento") or CHANNELS.get("beep") or CHANNELS.get("voz")
-    if canal is None:
-        return
-    for nm in ("av1", "av2", "av3"):
-        if _quit_evt and _quit_evt.is_signaled():
+    def _seq():
+        if not audio_ok:
             return
-        snd = _SND.get(nm) or _carregar_wav(nm)
-        if not snd:
-            continue
-        try:
-            canal.set_volume(1.0)
-            canal.play(snd)
-            _esperar_canal(canal, max(1.2, snd.get_length() + 0.3))
-        except Exception:
-            pass
-        time.sleep(1.0)
+        canal = CHANNELS.get("vento") or CHANNELS.get("beep") or CHANNELS.get("voz")
+        if canal is None:
+            return
+        for nm in ("av1", "av2", "av3"):
+            if _quit_evt and _quit_evt.is_signaled():
+                return
+            snd = _SND.get(nm) or _carregar_wav(nm)
+            if not snd:
+                continue
+            try:
+                canal.set_volume(1.0)
+                canal.play(snd)
+                _esperar_canal(canal, max(1.2, snd.get_length() + 0.3))
+            except Exception:
+                pass
+            time.sleep(1.0)
+
+    return run_audio_sequence(_seq, nome="alarme_vento")
 
 
 def tocar_random():
-    if not audio_ok:
-        return
-    canal = CHANNELS.get("voz") or CHANNELS.get("beep")
-    if canal is None:
-        return
-    snd = _SND.get("random") or _carregar_wav("random")
-    if not snd:
-        return
-    try:
-        canal.set_volume(1.0)
-        canal.play(snd)
-        _esperar_canal(canal, max(2.0, snd.get_length() + 0.5))
-    except Exception:
-        pass
+    def _seq():
+        if not audio_ok:
+            return
+        canal = CHANNELS.get("voz") or CHANNELS.get("beep")
+        if canal is None:
+            return
+        snd = _SND.get("random") or _carregar_wav("random")
+        if not snd:
+            return
+        try:
+            canal.set_volume(1.0)
+            canal.play(snd)
+            _esperar_canal(canal, max(2.0, snd.get_length() + 0.5))
+        except Exception:
+            pass
+
+    return run_audio_sequence(_seq, nome="random")
 
 
 # =========================
@@ -512,6 +568,7 @@ __all__ = [
     "falar_wavs",
     "tocar_alarme_vento",
     "tocar_random",
+    "run_audio_sequence",
     "audio_ok",
     "CHANNELS",
     "_quit_evt",

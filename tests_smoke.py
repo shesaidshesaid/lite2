@@ -1,5 +1,7 @@
-"""Smoke test mínimo para validar vento/rajada e geração de HTML."""
+"""Smoke test mínimo para validar vento/rajada, HTML e serialização de áudio."""
 
+import threading
+import time
 from pathlib import Path
 
 import _part1 as P1
@@ -44,5 +46,46 @@ def run_smoke():
     print("Smoke test OK ->", html_path)
 
 
+def run_smoke_audio_serialization():
+    """Valida serialização de áudio sem reproduzir arquivos reais."""
+
+    eventos = []
+    tocando = {"flag": False}
+
+    def _sequencia(nome, dur=0.2):
+        def _inner():
+            if tocando["flag"]:
+                raise AssertionError(f"Sobreposição detectada em {nome}")
+            tocando["flag"] = True
+            eventos.append(f"{nome}-start")
+            time.sleep(dur)
+            eventos.append(f"{nome}-end")
+            tocando["flag"] = False
+
+        return _inner
+
+    t_pitch = threading.Thread(
+        target=lambda: P1.run_audio_sequence(_sequencia("pitch_roll"), nome="pitch_roll")
+    )
+    t_vento = threading.Thread(
+        target=lambda: P1.run_audio_sequence(_sequencia("vento"), nome="vento")
+    )
+
+    t_pitch.start()
+    time.sleep(0.05)
+    t_vento.start()
+    t_pitch.join()
+    t_vento.join()
+
+    assert eventos == [
+        "pitch_roll-start",
+        "pitch_roll-end",
+        "vento-start",
+        "vento-end",
+    ], f"Sequência inesperada: {eventos}"
+    print("Smoke serialização OK ->", eventos)
+
+
 if __name__ == "__main__":
     run_smoke()
+    run_smoke_audio_serialization()
