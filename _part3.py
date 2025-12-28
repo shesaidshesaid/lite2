@@ -276,35 +276,43 @@ def run_monitor():
 
 
 def _main():
-    P1.keep_screen_on(True)
-    P5.start_control_server(P1.MUTE_CTRL_PORT)
-    atexit.register(lambda: P1.keep_screen_on(False))
     ap = P1.base_argparser()
     args = ap.parse_args()
 
+    # 1) modo stop: sinaliza e sai, sem subir servidor nenhum
     if args.stop:
         ok = P1.signal_quit()
-        msg = "OK, sinal enviado." if ok else "Nenhuma instância encontrada."
-        print(msg)
-        sys.exit(0)
+        print("OK, sinal enviado." if ok else "Nenhuma instância encontrada.")
+        return
 
+    # 2) mutex primeiro (antes de iniciar servidor/pygame/etc.)
     ja_existe, _ = P1.obter_mutex()
+    if ja_existe:
+        ok = P1.signal_quit()
+        print(
+            "Outra instância já está rodando. Enviei sinal para encerrar."
+            if ok
+            else "Outra instância já está rodando; não consegui sinalizar. Use --stop."
+        )
+        return
+
+    # 3) só a instância primária faz o resto
+    P1.keep_screen_on(True)
+    atexit.register(lambda: P1.keep_screen_on(False))
+
     try:
         P1._quit_evt = P1.QuitEvent()
         P1._quit_evt.create()
     except Exception:
         P1._quit_evt = None
 
-    if ja_existe:
-        ok = P1.signal_quit()
-        msg = "Outra instância já está rodando. Enviei sinal para encerrar." if ok else "Outra instância já está rodando; não consegui sinalizar. Use --stop."
-        print(msg)
-        sys.exit(0)
+    P5.start_control_server(P1.MUTE_CTRL_PORT)
 
     try:
         run_monitor()
     finally:
         encerrar_gracioso()
+
 
 
 if __name__ == "__main__":

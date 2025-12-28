@@ -47,8 +47,8 @@ FATOR_CORRECAO_PITCH = FATOR_CORRECAO_ROLL = 0.74
 AA_PITCH, AA_ROLL = 0.08, -0.08
 NIVELADA_POS, NIVELADA_NEG = 0.34, -0.34
 
-L2_LEVELS = [0.50, -0.50, 0.50, -0.50]
-L3_LEVELS = [0.90, -0.90, 0.90, -0.90]
+L2_LEVELS = [0.01, -0.01, 0.01, -0.01]
+L3_LEVELS = [0.10, -0.10, 0.10, -0.10]
 
 OFFSET_L4 = 0.45
 L4_LEVELS = [
@@ -239,13 +239,36 @@ _mutex_handle = None
 def signal_quit(name: str = QUIT_EVENT_NAME) -> bool:
     if not kernel32:
         return False
-    h = kernel32.OpenEventW(EVENT_MODIFY_STATE, False, name)
-    if not h:
-        return False
-    try:
-        return bool(kernel32.SetEvent(h))
-    finally:
-        kernel32.CloseHandle(h)
+
+    def _try(name_try: str) -> bool:
+        h = None
+        try:
+            # tenta abrir (se existir)
+            h = kernel32.OpenEventW(EVENT_MODIFY_STATE, False, name_try)
+            if not h:
+                # abre se existir / cria se não existir (evita race)
+                h = kernel32.CreateEventW(None, True, False, name_try)
+            if not h:
+                return False
+            return bool(kernel32.SetEvent(h))
+        finally:
+            try:
+                if h:
+                    kernel32.CloseHandle(h)
+            except Exception:
+                pass
+
+    # 1) tenta como está (Global\...)
+    if _try(name):
+        return True
+
+    # 2) fallback corporativo: Local\...
+    if isinstance(name, str) and name.startswith("Global\\"):
+        local_name = "Local\\" + name[len("Global\\"):]
+        if _try(local_name):
+            return True
+
+    return False
 
 
 def obter_mutex():
