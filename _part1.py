@@ -25,6 +25,48 @@ from logging.handlers import RotatingFileHandler
 
 
 # =========================
+# Diretórios (recursos x saída)
+# =========================
+def _can_write_in_dir(d: str) -> bool:
+    """Realiza probe de escrita criando/apagando um arquivo temporário."""
+
+    try:
+        os.makedirs(d, exist_ok=True)
+        test_path = os.path.join(d, ".__lite2_write_test.tmp")
+        with open(test_path, "w", encoding="utf-8") as f:
+            f.write("ok")
+        os.remove(test_path)
+        return True
+    except Exception:
+        return False
+
+
+def escolher_output_dir(app_name: str = "lite2") -> str:
+    """Escolhe saída: exe/script, %LOCALAPPDATA%/<app>, %TEMP%/<app>, cwd."""
+
+    candidates = []
+
+    try:
+        base = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
+        candidates.append(base)
+    except Exception:
+        pass
+
+    lad = os.environ.get("LOCALAPPDATA")
+    if lad:
+        candidates.append(os.path.join(lad, app_name))
+
+    candidates.append(os.path.join(tempfile.gettempdir(), app_name))
+    candidates.append(os.getcwd())
+
+    for candidate in candidates:
+        if _can_write_in_dir(candidate):
+            return candidate
+
+    return os.getcwd()
+
+
+# =========================
 # Dependências opcionais
 # =========================
 requests_spec = importlib.util.find_spec("requests")
@@ -181,51 +223,6 @@ REGEX = {
 # =========================
 # Helpers
 # =========================
-
-def _can_write_in_dir(d: str) -> bool:
-    try:
-        os.makedirs(d, exist_ok=True)
-        test_path = os.path.join(d, ".__lite2_write_test.tmp")
-        with open(test_path, "w", encoding="utf-8") as f:
-            f.write("ok")
-        os.remove(test_path)
-        return True
-    except Exception:
-        return False
-
-
-def escolher_output_dir(app_name: str = "lite2") -> str:
-    """
-    Escolhe diretório efetivo para saída (logs/html) com fallback:
-      1) pasta do exe (frozen) ou do script
-      2) %LOCALAPPDATA%\\lite2
-      3) %TEMP%\\lite2
-    """
-    # 1) pasta do exe (frozen) ou do script
-    try:
-        base = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
-        if _can_write_in_dir(base):
-            return base
-    except Exception:
-        pass
-
-    # 2) LOCALAPPDATA
-    try:
-        lad = os.environ.get("LOCALAPPDATA")
-        if lad:
-            d = os.path.join(lad, app_name)
-            if _can_write_in_dir(d):
-                return d
-    except Exception:
-        pass
-
-    # 3) TEMP
-    try:
-        d = os.path.join(tempfile.gettempdir(), app_name)
-        os.makedirs(d, exist_ok=True)
-        return d
-    except Exception:
-        return os.getcwd()
 
 
 def _now_str() -> str:
