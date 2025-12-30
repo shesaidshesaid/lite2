@@ -183,6 +183,7 @@ def coletar_wind_com_fallback(tentativas: int = 1, timeout: int = 10):
             resumo = ", ".join(f"{h} ({motivo})" for h, motivo in rejeicoes)
             P1.log.info("Hosts com dados de vento rejeitados: %s", resumo)
         P1.log.warning("Nenhum host de vento válido após tentar %s.", ", ".join(ordem))
+        P1.log_event("WIND_FAIL", hosts=",".join(ordem), rejected=len(rejeicoes))
     return None
 
 

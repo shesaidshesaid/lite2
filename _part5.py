@@ -13,7 +13,7 @@ import webbrowser
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, urlparse
 
 import _part1 as P1
@@ -36,21 +36,9 @@ def _coletar_est_para_confirmacao():
         d_pr = P1.coletar_json(P1.URL_SMP_PITCH_ROLL, tentativas=1, timeout=5)
         d_wind = P2.coletar_wind_com_fallback(tentativas=1, timeout=5)
 
-        if not d_pr and not d_wind:
+        dados = merge_dados(d_pr, d_wind)
+        if not dados:
             return None
-
-        dados = {}
-        if d_pr:
-            for k in P1.KEYS_PR:
-                if k in d_pr:
-                    dados[k] = d_pr[k]
-
-        if d_wind:
-            for k in P1.KEYS_WIND:
-                if k in d_wind:
-                    dados[k] = d_wind[k]
-            if d_wind.get("_wind_source"):
-                dados["_wind_source"] = d_wind["_wind_source"]
 
         return P4.avaliar_de_json(dados)
     except Exception:
@@ -127,6 +115,9 @@ class AlarmState:
         elif nivel == 4:
             self.ultimo_alarme_l4 = now
 
+    def _log_alarm_skip(self, reason: str, level: int, prev: int | None = None) -> None:
+        P1.log_event("ALARM_SUPPRESS", reason=reason, level=level, prev=prev)
+
     def maybe_schedule(self, est: dict) -> None:
         """Chamado no loop principal a cada atualização 'normal'."""
         nivel = self.nivel_combinado(est)
@@ -146,14 +137,17 @@ class AlarmState:
 
             # Se já existe confirmação em andamento, não empilha
             if self.confirm_pending:
+                self._log_alarm_skip("confirm_pending", nivel, prev)
                 return
 
             # Respeita silêncio (8 min) para <= nível silenciado
             if self._is_silenced_locked(nivel, now):
+                self._log_alarm_skip("silenced", nivel, prev)
                 return
 
             # Mantém sua lógica atual de mute manual L2/L3 (L4 continua podendo tocar)
             if nivel <= 3 and is_muted_L23():
+                self._log_alarm_skip("muted_L23", nivel, prev)
                 return
 
             # Agenda confirmação (5s)
@@ -166,26 +160,31 @@ class AlarmState:
         try:
             # se estiver encerrando, não toca nada
             if P1._quit_evt and P1._quit_evt.is_signaled():
+                self._log_alarm_skip("quit_signal", level=0)
                 return
 
             est2 = _coletar_est_para_confirmacao()
             if not est2:
+                self._log_alarm_skip("confirm_no_data", level=0)
                 return
 
             nivel2 = self.nivel_combinado(est2)
 
             # confirmação caiu para L0/L1 -> não toca
             if nivel2 < 2:
+                self._log_alarm_skip("confirm_low_level", level=nivel2)
                 return
 
             # respeita mute manual L2/L3 na confirmação também
             if nivel2 <= 3 and is_muted_L23():
+                self._log_alarm_skip("confirm_muted_L23", level=nivel2)
                 return
 
             now = self._now()
             with self._lock:
                 # silêncio é sagrado
                 if self._is_silenced_locked(nivel2, now):
+                    self._log_alarm_skip("confirm_silenced", level=nivel2)
                     return
 
                 # aplica silêncio ANTES de tocar, para evitar duplicidade enquanto toca
@@ -238,10 +237,13 @@ def _clear_mute_L23():
 # Merge helpers
 # =========================================================
 
-def merge_dados(d_pr: Optional[Dict], d_wind: Optional[Dict]):
+def merge_dados(d_pr: Optional[Dict[str, Any]], d_wind: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not d_pr and not d_wind:
+        P1.log.warning("Sem dados de pitch/roll ou vento para mesclar.")
+        P1.log_event("MERGE_EMPTY", pitch_roll=False, wind=False)
         return None
-    dados: Dict = {}
+
+    dados: Dict[str, Any] = {}
     if d_pr:
         for k in P1.KEYS_PR:
             if k in d_pr:
@@ -252,6 +254,12 @@ def merge_dados(d_pr: Optional[Dict], d_wind: Optional[Dict]):
                 dados[k] = d_wind[k]
         if d_wind.get("_wind_source"):
             dados["_wind_source"] = d_wind["_wind_source"]
+
+    if not dados:
+        P1.log.warning("Merge retornou vazio apesar de entradas existirem (pr=%s, wind=%s).", bool(d_pr), bool(d_wind))
+        P1.log_event("MERGE_EMPTY", pitch_roll=bool(d_pr), wind=bool(d_wind))
+        return None
+
     return dados
 
 
@@ -259,9 +267,10 @@ def refresh_html_now():
     try:
         d_pr = P1.coletar_json(P1.URL_SMP_PITCH_ROLL, tentativas=1, timeout=5)
         d_wind = P2.coletar_wind_com_fallback(tentativas=1, timeout=5)
-        if not d_pr and not d_wind:
-            return False
         dados = merge_dados(d_pr, d_wind)
+        if not dados:
+            P1.log_event("HTML_REFRESH_SKIP", reason="no_data")
+            return False
         est = P4.avaliar_de_json(dados)
         gerar_html(
             est["pitch_val"],
