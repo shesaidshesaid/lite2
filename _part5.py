@@ -27,7 +27,7 @@ from _html_fallback import HTML_TPL
 # =========================================================
 
 ALARM_CONFIRM_SEC = 5.0
-ALARM_SILENCE_SEC = 8 * 60.0  # 8 minutos
+ALARM_SILENCE_SEC = 11 * 60.0  # 11 minutos
 
 
 def _coletar_est_para_confirmacao():
@@ -140,7 +140,7 @@ class AlarmState:
                 self._log_alarm_skip("confirm_pending", nivel, prev)
                 return
 
-            # Respeita silêncio (8 min) para <= nível silenciado
+            # Respeita silêncio (11 min) para <= nível silenciado
             if self._is_silenced_locked(nivel, now):
                 self._log_alarm_skip("silenced", nivel, prev)
                 return

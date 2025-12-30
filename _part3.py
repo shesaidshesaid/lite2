@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+
 import os
 import sys
 import time
@@ -24,24 +25,43 @@ RETENCAO_HORAS = 36
 _last_snap_ts = 0.0
 
 
-def ler_ultimo_do_log():
-    """Retorna (pitch, roll, rajada) do último registro válido."""
+
+from typing import Optional, Tuple
+
+def ler_ultimo_do_log() -> Optional[Tuple[float, float, float]]:
+    """Retorna (pitch, roll, rajada) do último registro válido (linha SNAP)."""
     try:
-        if (not os.path.isfile(P1.FILES["log"])) or os.path.getsize(P1.FILES["log"]) == 0:
+        log_path = P1.FILES["log"]
+        if (not os.path.isfile(log_path)) or os.path.getsize(log_path) == 0:
             return None
-        with open(P1.FILES["log"], "r", encoding="utf-8", errors="ignore") as f:
+
+        with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
             for li in reversed(f.readlines()):
                 parts = [p.strip() for p in li.split(";")]
                 if len(parts) < 3 or parts[1].upper() != "SNAP":
                     continue
+
                 valores = {k: v for k, v in (p.split("=", 1) for p in parts[2:] if "=" in p)}
-                try:
-                    return float(valores.get("pitch")), float(valores.get("roll")), float(valores.get("raj"))
-                except Exception:
+
+                pitch_s = valores.get("pitch")
+                roll_s  = valores.get("roll")
+                raj_s   = valores.get("raj")
+
+                # Se faltar algum campo, não tenta converter
+                if pitch_s is None or roll_s is None or raj_s is None:
                     continue
+
+                try:
+                    return float(pitch_s), float(roll_s), float(raj_s)
+                except ValueError:
+                    # Campo veio não-numérico (ex: vazio, "None", etc.)
+                    continue
+
     except Exception:
         P1.log.exception("Erro ao ler último registro do log")
+
     return None
+
 
 
 def encerrar_gracioso():

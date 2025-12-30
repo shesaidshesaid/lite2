@@ -172,11 +172,28 @@ def coletar_wind_com_fallback(tentativas: int = 1, timeout: int = 10):
 
         algum_host_ok = True
         d["_wind_source"] = host
-        P1.log.info("Usando vento de %s (vm=%s, raj=%s).", host, vm, rj)
+
+        # Loga SOMENTE quando o host muda
         if host != _LAST_WIND_HOST:
-            P1.log_event("WIND_HOST", host=host, vm=vm_num, raj=rj_num, prev=_LAST_WIND_HOST)
+            P1.log_event(
+                "WIND_HOST",
+                host=host,
+                vm=vm_num,
+                raj=rj_num,
+                prev=_LAST_WIND_HOST,
+            )
             _LAST_WIND_HOST = host
+
+        # DEBUG opcional (não aparece no EXE, nem em produção)
+        P1.log.debug(
+            "Vento ativo: %s (vm=%.2f, raj=%.2f)",
+            host,
+            vm_num,
+            rj_num,
+        )
+
         return d
+
 
     if not algum_host_ok:
         if rejeicoes:

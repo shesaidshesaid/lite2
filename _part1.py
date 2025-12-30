@@ -20,7 +20,7 @@ import tempfile
 from datetime import datetime, timedelta
 
 from ctypes import wintypes
-from typing import Optional
+from typing import Optional, Any
 from logging.handlers import RotatingFileHandler
 
 
@@ -295,10 +295,11 @@ def log_snapshot(pitch, roll, vento_med, raj, wind_source=None) -> None:
     append_log_line("SNAP", *parts)
 
 
-def safe_float(val: object | None, default: Optional[float] = None) -> Optional[float]:
+def safe_float(val: Any, default: Optional[float] = None) -> Optional[float]:
     try:
         if val is None:
             return default
+
         if isinstance(val, str):
             cleaned = val.strip()
             if cleaned == "":
@@ -306,9 +307,11 @@ def safe_float(val: object | None, default: Optional[float] = None) -> Optional[
             out = float(cleaned)
         else:
             out = float(val)
+
         return out if math.isfinite(out) else default
     except Exception:
         return default
+
 
 
 def clamp(val: float, min_val: float, max_val: float) -> float:
