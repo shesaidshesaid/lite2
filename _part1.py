@@ -17,7 +17,7 @@ import threading
 import time
 
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from ctypes import wintypes
 from typing import Optional
@@ -106,7 +106,7 @@ L4_LEVELS = [
 ]
 
 JANELA_WIND_SEC, TOP_N_WIND = 120, 4
-LOG_RETENCAO_HRS, VENTO_ALARME_CHECK_INTERVAL_MIN = 48, 15
+LOG_RETENCAO_HRS, VENTO_ALARME_CHECK_INTERVAL_MIN = 36, 15
 VENTO_ALARME_THRESHOLD, VENTO_REARME_MIN = 21.0, 76
 MUTE_CTRL_PORT = 8765
 
@@ -193,6 +193,7 @@ def _setup_logging() -> logging.Logger:
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 
     try:
+        _apply_log_retention()
         os.makedirs(os.path.dirname(FILES["events"]), exist_ok=True)
         handler = logging.FileHandler(FILES["events"], encoding="utf-8")
     except Exception:
@@ -229,13 +230,45 @@ def _now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def append_log_line(line: str) -> None:
+def _apply_log_retention():
+    """Mantém apenas as últimas LOG_RETENCAO_HRS horas no arquivo único."""
+    logger = logging.getLogger("painel")
+    path = FILES["events"]
+    cutoff = datetime.now() - timedelta(hours=LOG_RETENCAO_HRS)
+    try:
+        if not os.path.exists(path) or os.path.getsize(path) == 0:
+            return
+
+        kept = []
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            for li in f:
+                ts_str = li.split(";", 1)[0].strip()
+                try:
+                    ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    kept.append(li.rstrip("\n"))
+                    continue
+                if ts >= cutoff:
+                    kept.append(li.rstrip("\n"))
+
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(kept) + ("\n" if kept else ""))
+    except Exception:
+        try:
+            logger.warning("Falha ao aplicar retenção do log único", exc_info=True)
+        except Exception:
+            pass
+
+
+def append_log_line(entry_type: str, *parts: str) -> None:
     """Append seguro no log único (não pode quebrar o monitor)."""
     try:
         path = FILES["events"]
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        clean_parts = [str(p).strip() for p in parts if p is not None and str(p).strip() != ""]
+        line = "; ".join([_now_str(), entry_type.strip().upper()] + clean_parts)
         with open(path, "a", encoding="utf-8") as f:
-            f.write(line.rstrip() + "\n")
+            f.write(line + "\n")
     except Exception:
         # não pode crashar; usa logger se estiver de pé
         try:
@@ -245,22 +278,21 @@ def append_log_line(line: str) -> None:
 
 
 def log_event(event_name: str, **kv) -> None:
-    parts = [f"{_now_str()}; EVENT; {event_name}"]
+    parts = [f"event={event_name}"]
     for k, v in kv.items():
         parts.append(f"{k}={v}")
-    append_log_line("; ".join(parts))
+    append_log_line("EVENT", *parts)
 
 
 def log_snapshot(pitch, roll, vento_med, raj, wind_source=None) -> None:
     parts = [
-        f"{_now_str()}; SNAP",
         f"pitch={pitch}",
         f"roll={roll}",
         f"vento={vento_med}",
         f"raj={raj}",
         f"src={wind_source}",
     ]
-    append_log_line("; ".join(parts))
+    append_log_line("SNAP", *parts)
 
 
 def safe_float(val: object, default: Optional[float] = None) -> Optional[float]:
@@ -386,6 +418,7 @@ def coletar_json(url: str, tentativas: int = 3, timeout: int = 10):
             log.debug("Falha na tentativa %s para %s", tent + 1, url, exc_info=True)
             if tent == tentativas - 1:
                 log.warning("Falha ao coletar %s", url, exc_info=True)
+                log_event("HTTP_FAIL", url=url)
                 return None
             time.sleep(0.5)
     return None
