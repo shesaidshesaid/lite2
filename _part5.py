@@ -58,18 +58,26 @@ def _coletar_est_para_confirmacao():
 
 
 def _tocar_alarme_pitch_roll(nivel: int, est: dict) -> None:
-    """Toca beep + voz conforme direções ativas (>=L2)."""
     cond = []
     if est.get("pitch_nivel", 0) >= 2 and est.get("pitch_rot") != "NIVELADA":
         cond.append(est["pitch_rot"])
     if est.get("roll_nivel", 0) >= 2 and est.get("roll_rot") != "NIVELADA":
         cond.append(est["roll_rot"])
 
+    P1.log_event(
+        "ALARM_PITCHROLL",
+        level=nivel,
+        pitch=est.get("pitch_val"),
+        roll=est.get("roll_val"),
+        dirs=",".join(cond) if cond else "NONE",
+    )
+
     def _seq():
         P1.tocar_alerta(nivel)
         P1.falar_wavs(cond, incluir_atencao=(nivel >= 3))
 
     P1.run_audio_sequence(_seq, nome="pitch_roll")
+
 
 
 class AlarmState:

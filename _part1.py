@@ -15,6 +15,10 @@ import re
 import sys
 import threading
 import time
+
+import tempfile
+from datetime import datetime
+
 from ctypes import wintypes
 from typing import Optional
 from logging.handlers import RotatingFileHandler
@@ -92,13 +96,29 @@ ES_CONTINUOUS, ES_SYSTEM_REQUIRED, ES_DISPLAY_REQUIRED = 0x80000000, 0x00000001,
 WAIT_OBJECT_0, EVENT_MODIFY_STATE = 0x00000000, 0x0002
 QUIT_EVENT_NAME = "Global\\PitchRollMonitorQuitEvent"
 
-BASE_DIR = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__))
-RESOURCE_ROOT = getattr(sys, "_MEIPASS", BASE_DIR) if getattr(sys, "frozen", False) else BASE_DIR
+# =========================
+# Diretórios (recursos x saída)
+# =========================
+IS_FROZEN = bool(getattr(sys, "frozen", False))
+
+# Onde está o script/exe (bom para localizar recursos quando não frozen)
+BASE_DIR = os.path.dirname(sys.executable) if IS_FROZEN else os.path.dirname(os.path.abspath(__file__))
+
+# Onde estão os recursos empacotados (PyInstaller usa _MEIPASS)
+RESOURCE_ROOT = getattr(sys, "_MEIPASS", BASE_DIR) if IS_FROZEN else BASE_DIR
 AUDIO_DIR = os.path.join(RESOURCE_ROOT, "audioss")
 
+# Onde vamos gravar HTML e logs (tem que ser gravável)
+OUTPUT_DIR = escolher_output_dir("lite2")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
 FILES = {
-    "log": os.path.join(BASE_DIR, "pitch_roll_log.txt"),
-    "html": os.path.join(BASE_DIR, "pitch_roll.html"),
+    # ÚNICO TXT (eventos + snapshots + logging padrão)
+    "events": os.path.join(OUTPUT_DIR, "lite2_events.log"),
+    # Alias para compatibilidade temporária (se ainda existir código usando FILES["log"])
+    "log": os.path.join(OUTPUT_DIR, "lite2_events.log"),
+    # HTML gerado
+    "html": os.path.join(OUTPUT_DIR, "pitch_roll.html"),
 }
 
 
@@ -108,18 +128,19 @@ def ordered_wind_hosts(preferencia: Optional[str] = None):
         return [preferencia] + [h for h in WIND_HOSTS_ORDER if h != preferencia]
     return list(WIND_HOSTS_ORDER)
 
+
 # =========================
-# Logging com rotação
+# Logging (no arquivo único)
 # =========================
-LOG_FILE = os.path.join(BASE_DIR, "monitor.log")
-LOG_MAX_BYTES = 5 * 1024 * 1024   # 5 MB
-LOG_BACKUP_COUNT = 5              # mantém monitor.log.1 ... monitor.log.5
+_LOGGING_CONFIGURED = False
 
 
 def _setup_logging() -> logging.Logger:
-    """Configura logging com rotação (idempotente) e devolve o logger nomeado."""
+    """Configura logging (idempotente) no arquivo único e devolve o logger nomeado."""
+    global _LOGGING_CONFIGURED
+
     logger = logging.getLogger("painel")
-    if getattr(logger, "_pitchroll_logging_configured", False):
+    if _LOGGING_CONFIGURED:
         return logger
 
     level_name = os.environ.get("PITCHROLL_LOG_LEVEL", "INFO").upper()
@@ -128,22 +149,25 @@ def _setup_logging() -> logging.Logger:
     logger.propagate = False
 
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-    handler = RotatingFileHandler(
-        LOG_FILE,
-        maxBytes=LOG_MAX_BYTES,
-        backupCount=LOG_BACKUP_COUNT,
-        encoding="utf-8",
-    )
+
+    try:
+        os.makedirs(os.path.dirname(FILES["events"]), exist_ok=True)
+        handler = logging.FileHandler(FILES["events"], encoding="utf-8")
+    except Exception:
+        handler = logging.StreamHandler(sys.stderr)
+
     handler.setFormatter(fmt)
 
-    if not any(isinstance(h, RotatingFileHandler) for h in logger.handlers):
+    # evita duplicar handlers se recarregar módulo em dev
+    if not any(type(h) is type(handler) for h in logger.handlers):
         logger.addHandler(handler)
 
-    logger._pitchroll_logging_configured = True
+    _LOGGING_CONFIGURED = True
     return logger
 
 
 log = _setup_logging()
+
 
 
 REGEX = {
@@ -157,6 +181,90 @@ REGEX = {
 # =========================
 # Helpers
 # =========================
+
+def _can_write_in_dir(d: str) -> bool:
+    try:
+        os.makedirs(d, exist_ok=True)
+        test_path = os.path.join(d, ".__lite2_write_test.tmp")
+        with open(test_path, "w", encoding="utf-8") as f:
+            f.write("ok")
+        os.remove(test_path)
+        return True
+    except Exception:
+        return False
+
+
+def escolher_output_dir(app_name: str = "lite2") -> str:
+    """
+    Escolhe diretório efetivo para saída (logs/html) com fallback:
+      1) pasta do exe (frozen) ou do script
+      2) %LOCALAPPDATA%\\lite2
+      3) %TEMP%\\lite2
+    """
+    # 1) pasta do exe (frozen) ou do script
+    try:
+        base = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
+        if _can_write_in_dir(base):
+            return base
+    except Exception:
+        pass
+
+    # 2) LOCALAPPDATA
+    try:
+        lad = os.environ.get("LOCALAPPDATA")
+        if lad:
+            d = os.path.join(lad, app_name)
+            if _can_write_in_dir(d):
+                return d
+    except Exception:
+        pass
+
+    # 3) TEMP
+    try:
+        d = os.path.join(tempfile.gettempdir(), app_name)
+        os.makedirs(d, exist_ok=True)
+        return d
+    except Exception:
+        return os.getcwd()
+
+
+def _now_str() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def append_log_line(line: str) -> None:
+    """Append seguro no log único (não pode quebrar o monitor)."""
+    try:
+        path = FILES["events"]
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line.rstrip() + "\n")
+    except Exception:
+        # não pode crashar; usa logger se estiver de pé
+        try:
+            log.warning("Falha ao escrever no log único", exc_info=True)
+        except Exception:
+            pass
+
+
+def log_event(event_name: str, **kv) -> None:
+    parts = [f"{_now_str()}; EVENT; {event_name}"]
+    for k, v in kv.items():
+        parts.append(f"{k}={v}")
+    append_log_line("; ".join(parts))
+
+
+def log_snapshot(pitch, roll, vento_med, raj, wind_source=None) -> None:
+    parts = [
+        f"{_now_str()}; SNAP",
+        f"pitch={pitch}",
+        f"roll={roll}",
+        f"vento={vento_med}",
+        f"raj={raj}",
+        f"src={wind_source}",
+    ]
+    append_log_line("; ".join(parts))
+
 
 def safe_float(val: object, default: Optional[float] = None) -> Optional[float]:
     try:

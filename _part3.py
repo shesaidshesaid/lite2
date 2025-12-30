@@ -23,6 +23,63 @@ _LOG_COMPACT_INTERVAL_SEC = 300  # 5 minutos
 _LOG_COMPACT_SIZE_BYTES = 512 * 1024
 _last_log_compact_ts = time.monotonic()
 
+SNAP_INTERVAL_SEC = 120     # 2 minutos
+RETENCAO_HORAS = 36
+
+_COMPACT_INTERVAL_SEC = 900     # 15 min
+_COMPACT_SIZE_BYTES = 2 * 1024 * 1024  # 2MB
+
+_last_snap_ts = 0.0
+_last_compact_ts = 0.0
+
+
+def compactar_log_unico_if_needed():
+    global _last_compact_ts
+    path = P1.FILES["events"]
+    now_mono = time.monotonic()
+
+    try:
+        size_trigger = False
+        try:
+            size_trigger = os.path.getsize(path) > _COMPACT_SIZE_BYTES
+        except Exception:
+            size_trigger = False
+
+        if (now_mono - _last_compact_ts) < _COMPACT_INTERVAL_SEC and not size_trigger:
+            return
+
+        cutoff = datetime.now() - timedelta(hours=RETENCAO_HORAS)
+        kept = []
+
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                for li in f:
+                    li = li.strip()
+                    if not li:
+                        continue
+                    try:
+                        ts_str = li.split(";", 1)[0].strip()
+                        ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                        if ts >= cutoff:
+                            kept.append(li)
+                    except Exception:
+                        # mantém linhas fora do padrão também
+                        kept.append(li)
+
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("\n".join(kept) + ("\n" if kept else ""))
+        os.replace(tmp, path)
+
+        _last_compact_ts = now_mono
+    except Exception:
+        try:
+            P1.log.warning("Falha ao compactar log único; mantendo append.", exc_info=True)
+        except Exception:
+            pass
+
+
+
 
 
 def ler_ultimo_do_log():
@@ -133,6 +190,20 @@ def run_monitor():
 
     if dados:
         est = P4.avaliar_de_json(dados)
+        global _last_snap_ts
+        now_mono = time.monotonic()
+        if (now_mono - _last_snap_ts) >= SNAP_INTERVAL_SEC:
+            P1.log_snapshot(
+                est.get("pitch_val"),
+                est.get("roll_val"),
+                est.get("vento_med"),
+                est.get("raj"),
+                est.get("wind_source"),
+            )
+            _last_snap_ts = now_mono
+
+        compactar_log_unico_if_needed()
+
     else:
         ult = ler_ultimo_do_log()
         if ult:
@@ -197,6 +268,8 @@ def run_monitor():
         rajada_acima = (raj_num is not None) and (raj_num > P1.VENTO_ALARME_THRESHOLD)
         if vento_acima or rajada_acima:
             if (now - wind_alarm_state["last_wind_alarm_ts"]) >= (P1.VENTO_REARME_MIN * 60.0):
+                P1.log_event("ALARM_WIND", vento=vento_num, raj=raj_num, threshold=P1.VENTO_ALARME_THRESHOLD)
+
                 P1.tocar_alarme_vento()
                 wind_alarm_state["last_wind_alarm_ts"] = now
 
