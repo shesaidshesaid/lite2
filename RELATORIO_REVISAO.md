@@ -32,7 +32,7 @@
 - **Desescalonamento/reset**: níveis inferiores apenas atualizam `nivel_anterior`; não tocam som e não limpam silêncio antes do tempo expirar. Oscilações rápidas são amortecidas porque só toca em subida e exige confirmação.
 
 ### Alarme de vento simples
-- Triggera se vento médio **ou** rajada >21.0 m/s e último alarme foi há ≥76 min; roda a cada 15 min (e uma vez 9s após start). Sem histerese adicional.
+- Triggera se vento médio **ou** rajada >22.0 m/s e último alarme foi há ≥76 min; roda a cada 15 min (e uma vez 9s após start). Sem histerese adicional.
 
 ## Etapa D — Otimização e limpeza
 - **Código morto/não usado**: constantes `INIBICAO_L3_SOBRE_L2_MIN`, `INIBICAO_L4_SOBRE_L23_MIN`, `RESET_ESTAVEL_CICLOS`, `OSCILACAO_MAX_MUDANCAS`, `OSCILACAO_JANELA_MIN`, `AUTO_MUTE_OSCILACAO_MIN` não são referenciadas. Import `deque` em `_part5.py` não é usado. `KEYS_WIND` carrega `windspdaux*` nunca consumidos.
@@ -52,7 +52,7 @@
 - **Testes**: criar fixtures JSON do PyHMS (com/sem `gustspdmaxv`, com apenas `gustspdmax["instantaneo op."]`, sem dados → fallback `windwnd`) para validar `vento_medio`/`rajada` e thresholds de cor. Simular sequência de níveis para garantir que `AlarmState` toca apenas na subida e respeita silêncio/mute.
 
 ### Testes manuais recomendados
-- Enviar payload real do PyHMS com `gustspdmaxv` e `windspdmean["med. 2 min"]`; verificar UI/HTML e alarme de vento (forçar >21 m/s) e origem `wind_source`.
+- Enviar payload real do PyHMS com `gustspdmaxv` e `windspdmean["med. 2 min"]`; verificar UI/HTML e alarme de vento (forçar >22 m/s) e origem `wind_source`.
 - Usar `/wind_pref` para alternar host válido/inválido e observar logs de seleção/falha.
 - Simular oscilações: variar `pitch/roll` para cruzar L2→L3→L4 e voltar, confirmando que o som só toca na subida e silencia por 8 min.
 - Validar `/mute` e `/unmute` (L2/L3) enquanto L4 continua tocando.

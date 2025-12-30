@@ -86,7 +86,7 @@ COLETA_INTERVAL = 9
 
 
 RANDOM_INTERVAL_HOURS = 4
-RANDOM_SILENCE_PERIOD_MIN = 40
+RANDOM_SILENCE_PERIOD_MIN = 50
 
 VOLUMES = {"beep_l2": 0.07, "beep_l3": 0.09, "beep_l4": 0.15, "voz": 100, "beep_fallback": 0.07}
 
@@ -107,7 +107,7 @@ L4_LEVELS = [
 
 JANELA_WIND_SEC, TOP_N_WIND = 120, 4
 LOG_RETENCAO_HRS, VENTO_ALARME_CHECK_INTERVAL_MIN = 36, 15
-VENTO_ALARME_THRESHOLD, VENTO_REARME_MIN = 21.0, 76
+VENTO_ALARME_THRESHOLD, VENTO_REARME_MIN = 22.0, 76
 MUTE_CTRL_PORT = 8765
 
 URL_SMP_PITCH_ROLL = "http://smp18ocn01:8509/get/data?missingvalues=null"
@@ -277,22 +277,53 @@ def append_log_line(entry_type: str, *parts: str) -> None:
             pass
 
 
-def log_event(event_name: str, **kv) -> None:
-    parts = [f"event={event_name}"]
+def _fmt_num(v, nd: int = 1) -> str:
+    """Formata números com nd casas; mantém string/int/bool como legíveis."""
+    try:
+        # bool é int em Python; trate antes
+        if isinstance(v, bool):
+            return "YES" if v else "NO"
+        if v is None:
+            return "---"
+        if isinstance(v, (int, float)):
+            return f"{float(v):.{nd}f}"
+        # tenta converter strings numéricas
+        fv = float(v)
+        return f"{fv:.{nd}f}"
+    except Exception:
+        # fallback para qualquer coisa (ex: host, texto)
+        s = str(v).strip()
+        return s if s else "---"
+
+
+def _kv_line(label: str, **kv) -> str:
+    """Monta linha amigável: LABEL | KEY: val | KEY: val ..."""
+    items = []
     for k, v in kv.items():
-        parts.append(f"{k}={v}")
-    append_log_line("EVENT", *parts)
+        key = str(k).strip().upper()
+        items.append(f"{key}: {_fmt_num(v)}")
+    # Espaçamento mais “humano”
+    return f"{label.upper():<6} | " + " | ".join(items)
+
+
+def log_event(event_name: str, **kv) -> None:
+    # EVENT com “NAME” destacado e chaves em maiúsculo
+    line = _kv_line("EVENT", name=event_name, **kv)
+    append_log_line(line)
 
 
 def log_snapshot(pitch, roll, vento_med, raj, wind_source=None) -> None:
-    parts = [
-        f"pitch={pitch}",
-        f"roll={roll}",
-        f"vento={vento_med}",
-        f"raj={raj}",
-        f"src={wind_source}",
-    ]
-    append_log_line("SNAP", *parts)
+    # SNAP com 1 casa decimal; SRC como texto
+    line = _kv_line(
+        "SNAP",
+        pitch=pitch,
+        roll=roll,
+        vento=vento_med,
+        raj=raj,
+        src=wind_source,
+    )
+    append_log_line(line)
+
 
 
 def safe_float(val: Any, default: Optional[float] = None) -> Optional[float]:

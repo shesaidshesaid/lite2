@@ -387,7 +387,7 @@ def gerar_html(
     last_epoch_ms = int(time.time() * 1000)
     pitch_txt = _fmt_or_dash(p, "{:.1f}")
     roll_txt = _fmt_or_dash(r, "{:.1f}")
-    rajada_txt = _fmt_or_dash(raj, "{:.2f}")
+    rajada_txt = _fmt_or_dash(raj, "{:.1f}")
 
 
 
