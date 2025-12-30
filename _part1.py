@@ -295,9 +295,17 @@ def log_snapshot(pitch, roll, vento_med, raj, wind_source=None) -> None:
     append_log_line("SNAP", *parts)
 
 
-def safe_float(val: object, default: Optional[float] = None) -> Optional[float]:
+def safe_float(val: object | None, default: Optional[float] = None) -> Optional[float]:
     try:
-        out = float(val)
+        if val is None:
+            return default
+        if isinstance(val, str):
+            cleaned = val.strip()
+            if cleaned == "":
+                return default
+            out = float(cleaned)
+        else:
+            out = float(val)
         return out if math.isfinite(out) else default
     except Exception:
         return default
@@ -450,6 +458,8 @@ def _init_audio() -> bool:
 
 
 audio_ok = _init_audio()
+# Quando pygame não está disponível, audio_ok fica False para evitar chamadas a atributos
+# de pygame.* mais adiante, mantendo o restante da aplicação funcional.
 
 
 def _any_channel_busy() -> bool:
@@ -500,7 +510,7 @@ def run_audio_sequence(seq_callable, nome: str = "audio_seq", timeout_s: float =
 
 
 def _carregar_wav(nome_base: str):
-    if not audio_ok:
+    if not audio_ok or pygame is None:
         return None
     path = os.path.join(AUDIO_DIR, f"{nome_base}.wav")
     try:
@@ -513,7 +523,7 @@ def _carregar_wav(nome_base: str):
 
 
 def _esperar_canal(canal, timeout_s: float = 10.0):
-    if not audio_ok or canal is None:
+    if not audio_ok or canal is None or pygame is None:
         return
     t0 = time.monotonic()
     while canal.get_busy():
@@ -526,7 +536,7 @@ def _esperar_canal(canal, timeout_s: float = 10.0):
 
 
 def _tocar_em_canal(nome_base: str, vol01: float, canal_nome: str):
-    if not audio_ok or not CHANNELS.get(canal_nome):
+    if not audio_ok or pygame is None or not CHANNELS.get(canal_nome):
         return
     snd = _SND.get(nome_base) or _carregar_wav(nome_base)
     if not snd:
