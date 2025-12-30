@@ -19,67 +19,9 @@ import threading
 
 
 STOP_EVENT = threading.Event()
-_LOG_COMPACT_INTERVAL_SEC = 300  # 5 minutos
-_LOG_COMPACT_SIZE_BYTES = 512 * 1024
-_last_log_compact_ts = time.monotonic()
-
 SNAP_INTERVAL_SEC = 120     # 2 minutos
 RETENCAO_HORAS = 36
-
-_COMPACT_INTERVAL_SEC = 900     # 15 min
-_COMPACT_SIZE_BYTES = 2 * 1024 * 1024  # 2MB
-
 _last_snap_ts = 0.0
-_last_compact_ts = 0.0
-
-
-def compactar_log_unico_if_needed():
-    global _last_compact_ts
-    path = P1.FILES["events"]
-    now_mono = time.monotonic()
-
-    try:
-        size_trigger = False
-        try:
-            size_trigger = os.path.getsize(path) > _COMPACT_SIZE_BYTES
-        except Exception:
-            size_trigger = False
-
-        if (now_mono - _last_compact_ts) < _COMPACT_INTERVAL_SEC and not size_trigger:
-            return
-
-        cutoff = datetime.now() - timedelta(hours=RETENCAO_HORAS)
-        kept = []
-
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                for li in f:
-                    li = li.strip()
-                    if not li:
-                        continue
-                    try:
-                        ts_str = li.split(";", 1)[0].strip()
-                        ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-                        if ts >= cutoff:
-                            kept.append(li)
-                    except Exception:
-                        # mantém linhas fora do padrão também
-                        kept.append(li)
-
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write("\n".join(kept) + ("\n" if kept else ""))
-        os.replace(tmp, path)
-
-        _last_compact_ts = now_mono
-    except Exception:
-        try:
-            P1.log.warning("Falha ao compactar log único; mantendo append.", exc_info=True)
-        except Exception:
-            pass
-
-
-
 
 
 def ler_ultimo_do_log():
@@ -89,61 +31,17 @@ def ler_ultimo_do_log():
             return None
         with open(P1.FILES["log"], "r", encoding="utf-8", errors="ignore") as f:
             for li in reversed(f.readlines()):
-                m = P1.REGEX["log_values"].match(li.strip())
-                if m:
-                    p, r, w = m.groups()
-                    return float(p), float(r), float(w)
+                parts = [p.strip() for p in li.split(";")]
+                if len(parts) < 3 or parts[1].upper() != "SNAP":
+                    continue
+                valores = {k: v for k, v in (p.split("=", 1) for p in parts[2:] if "=" in p)}
+                try:
+                    return float(valores.get("pitch")), float(valores.get("roll")), float(valores.get("raj"))
+                except Exception:
+                    continue
     except Exception:
         P1.log.exception("Erro ao ler último registro do log")
     return None
-
-
-def salvar_log(p, r, raj):
-    """Mantém retenção de LOG_RETENCAO_HRS horas e adiciona a linha atual."""
-    global _last_log_compact_ts
-    agora = datetime.now()
-    linha_atual = f"{agora.strftime('%H:%M %d/%m/%Y')};{float(p):.3f};{float(r):.3f};{float(raj):.2f}"
-
-    def _compactar():
-        linhas = []
-        try:
-            if os.path.exists(P1.FILES["log"]):
-                with open(P1.FILES["log"], "r", encoding="utf-8", errors="ignore") as f:
-                    for li in f:
-                        m = P1.REGEX["log_keep"].match(li)
-                        if not m:
-                            continue
-                        h, d = m.groups()
-                        try:
-                            ts = datetime.strptime(f"{h} {d}", "%H:%M %d/%m/%Y")
-                        except Exception:
-                            continue
-                        if ts >= agora - timedelta(hours=P1.LOG_RETENCAO_HRS):
-                            linhas.append(li.rstrip())
-            linhas.append(linha_atual)
-            with open(P1.FILES["log"], "w", encoding="utf-8") as f:
-                f.write("\n".join(linhas) + "\n")
-            return True
-        except Exception:
-            P1.log.warning("Falha ao compactar log; mantendo append.", exc_info=True)
-            return False
-
-    try:
-        need_compact = False
-        try:
-            need_compact = (time.monotonic() - _last_log_compact_ts) >= _LOG_COMPACT_INTERVAL_SEC
-            need_compact = need_compact or os.path.getsize(P1.FILES["log"]) > _LOG_COMPACT_SIZE_BYTES
-        except Exception:
-            need_compact = True
-
-        if need_compact and _compactar():
-            _last_log_compact_ts = time.monotonic()
-            return
-
-        with open(P1.FILES["log"], "a", encoding="utf-8") as f:
-            f.write(linha_atual + "\n")
-    except Exception:
-        P1.log.exception("Erro ao salvar log")
 
 
 def encerrar_gracioso():
@@ -167,185 +65,180 @@ def encerrar_gracioso():
 
 
 def run_monitor():
-    try:
-        if not os.path.exists(P1.FILES["log"]):
-            open(P1.FILES["log"], "w", encoding="utf-8").close()
-    except Exception:
-        P1.log.exception("Não foi possível preparar arquivo de log")
+    P1.log_event("RUN_START")
 
     def _coletar_merged():
         d_pr = P1.coletar_json(P1.URL_SMP_PITCH_ROLL)
         d_wind = P2.coletar_wind_com_fallback()
         return P5.merge_dados(d_pr, d_wind)
 
-    dados = None
-    for _ in range(3):
-        if STOP_EVENT.is_set() or (P1._quit_evt and P1._quit_evt.is_signaled()):
-            encerrar_gracioso()
-            return
-        dados = _coletar_merged()
-        if dados:
-            break
-        time.sleep(0.6)
+    def _render_html(est_local):
+        P5.gerar_html(
+            est_local["pitch_val"],
+            est_local["roll_val"],
+            est_local["pitch_cor"],
+            est_local["roll_cor"],
+            est_local["rot"],
+            est_local["raj"],
+            est_local["raj_cor"],
+            est_local["status_cor"],
+            est_local.get("wdir_adj"),
+            est_local.get("barometro"),
+            est_local.get("wdir_lbl"),
+            est_local.get("vento_med"),
+            est_local.get("vento_cor", "verde"),
+            est_local.get("wind_source"),
+        )
 
-    if dados:
-        est = P4.avaliar_de_json(dados)
-        global _last_snap_ts
-        now_mono = time.monotonic()
-        if (now_mono - _last_snap_ts) >= SNAP_INTERVAL_SEC:
-            P1.log_snapshot(
-                est.get("pitch_val"),
-                est.get("roll_val"),
-                est.get("vento_med"),
-                est.get("raj"),
-                est.get("wind_source"),
-            )
-            _last_snap_ts = now_mono
-
-        compactar_log_unico_if_needed()
-
-    else:
-        ult = ler_ultimo_do_log()
-        if ult:
-            p, r, w = ult
-            est = P4.avaliar_por_valores(p, r, w)
-            est.update({"wdir_adj": None, "wdir_lbl": None, "barometro": None, "vento_med": None, "vento_cor": "verde", "wind_source": None})
-        else:
-            est = {
-                "pitch_val": 0,
-                "roll_val": 0,
-                "pitch_cor": "amarelo",
-                "roll_cor": "amarelo",
-                "pitch_rot": "NIVELADA",
-                "pitch_hint": None,
-                "pitch_nivel": 0,
-                "roll_rot": "NIVELADA",
-                "roll_hint": None,
-                "roll_nivel": 0,
-                "rot": "⚠ SEM DADOS",
-                "status_cor": "amarelo",
-                "raj": 0,
-                "raj_cor": "verde",
-                "wdir_adj": None,
-                "wdir_lbl": None,
-                "barometro": None,
-                "vento_med": None,
-                "vento_cor": "verde",
-                "wind_source": None,
-            }
-
-    P5.gerar_html(
-        est["pitch_val"],
-        est["roll_val"],
-        est["pitch_cor"],
-        est["roll_cor"],
-        est["rot"],
-        est["raj"],
-        est["raj_cor"],
-        est["status_cor"],
-        est.get("wdir_adj"),
-        est.get("barometro"),
-        est.get("wdir_lbl"),
-        est.get("vento_med"),
-        est.get("vento_cor", "verde"),
-        est.get("wind_source"),
-    )
-    P5.abrir_html_no_navegador()
-
-    wind_alarm_state = {
-        "last_wind_alarm_ts": 0.0,
-        "next_wind_check_ts": time.monotonic() + P1.VENTO_ALARME_CHECK_INTERVAL_MIN * 60.0,
-    }
-
-    def verificar_alarme_vento(vento_val_atual, raj_val_atual):
-        now = time.monotonic()
-        try:
-            vento_num = None if (vento_val_atual is None) else float(vento_val_atual)
-            raj_num = None if (raj_val_atual is None) else float(raj_val_atual)
-        except Exception:
-            vento_num = raj_num = None
-        vento_acima = (vento_num is not None) and (vento_num > P1.VENTO_ALARME_THRESHOLD)
-        rajada_acima = (raj_num is not None) and (raj_num > P1.VENTO_ALARME_THRESHOLD)
-        if vento_acima or rajada_acima:
-            if (now - wind_alarm_state["last_wind_alarm_ts"]) >= (P1.VENTO_REARME_MIN * 60.0):
-                P1.log_event("ALARM_WIND", vento=vento_num, raj=raj_num, threshold=P1.VENTO_ALARME_THRESHOLD)
-
-                P1.tocar_alarme_vento()
-                wind_alarm_state["last_wind_alarm_ts"] = now
-
-    wind_alarm_timer = threading.Timer(
-        9.0, lambda: verificar_alarme_vento(est.get("vento_med"), est.get("raj"))
-    )
-    wind_alarm_timer.daemon = True
-    wind_alarm_timer.start()
-
-
-    def processar_alarme_pitch_roll(est_local):
-        P5.processar_alarme_pitch_roll(est_local)
-
-
-    
-
-    now_boot = time.monotonic()
-    if not hasattr(P5.alarm_state, "ultimo_random") or P5.alarm_state.ultimo_random <= 0:
-        P5.alarm_state.ultimo_random = now_boot
-
-    while not STOP_EVENT.is_set():
-        t0 = time.monotonic()
-
-        if STOP_EVENT.is_set() or (P1._quit_evt and P1._quit_evt.is_signaled()):
-            encerrar_gracioso()
-            return
-        dados = _coletar_merged()
-        if not dados:
-            P5.gerar_html(0, 0, "amarelo", "amarelo", "⚠ SEM DADOS", 0, "verde", "amarelo", None, None, None, vento_med=None, vento_cor="verde", wind_source=None)
-        else:
-            est = P4.avaliar_de_json(dados)
-            now = time.monotonic()
-            P5.gerar_html(
-                est["pitch_val"],
-                est["roll_val"],
-                est["pitch_cor"],
-                est["roll_cor"],
-                est["rot"],
-                est["raj"],
-                est["raj_cor"],
-                est["status_cor"],
-                est.get("wdir_adj"),
-                est.get("barometro"),
-                est.get("wdir_lbl"),
-                est.get("vento_med"),
-                est.get("vento_cor", "verde"),
-                est.get("wind_source"),
-            )
-            salvar_log(est["pitch_val"], est["roll_val"], est["raj"])
-            processar_alarme_pitch_roll(est)
-            if (now - P5.alarm_state.ultimo_random) >= (P1.RANDOM_INTERVAL_HOURS * 3600):
-                tempo_limite = now - (P1.RANDOM_SILENCE_PERIOD_MIN * 60)
-                sem_alarmes = (
-                    P5.alarm_state.ultimo_alarme_l2 < tempo_limite
-                    and P5.alarm_state.ultimo_alarme_l3 < tempo_limite
-                    and P5.alarm_state.ultimo_alarme_l4 < tempo_limite
-                )
-                if sem_alarmes:
-                    P1.tocar_random()
-                    P5.alarm_state.ultimo_random = now
-            if now >= wind_alarm_state["next_wind_check_ts"]:
-                wind_alarm_state["next_wind_check_ts"] = now + P1.VENTO_ALARME_CHECK_INTERVAL_MIN * 60.0
-                verificar_alarme_vento(est.get("vento_med"), est.get("raj"))
-
-        elapsed = time.monotonic() - t0
-        rest = max(0.0, P1.COLETA_INTERVAL - elapsed)
-        if P1._quit_evt and getattr(P1._quit_evt, "handle", None) and P1.kernel32 is not None:
-            res = P1.kernel32.WaitForSingleObject(P1._quit_evt.handle, int(rest * 1000))
-            if res == P1.WAIT_OBJECT_0:
+    try:
+        dados = None
+        for _ in range(3):
+            if STOP_EVENT.is_set() or (P1._quit_evt and P1._quit_evt.is_signaled()):
                 encerrar_gracioso()
                 return
-        else:
-            time.sleep(rest)
+            dados = _coletar_merged()
+            if dados:
+                break
+            time.sleep(0.6)
 
-    if wind_alarm_timer.is_alive():
-        wind_alarm_timer.cancel()
+        if dados:
+            est = P4.avaliar_de_json(dados)
+        else:
+            ult = ler_ultimo_do_log()
+            if ult:
+                p, r, w = ult
+                est = P4.avaliar_por_valores(p, r, w)
+                est.update({"wdir_adj": None, "wdir_lbl": None, "barometro": None, "vento_med": None, "vento_cor": "verde", "wind_source": None})
+            else:
+                est = {
+                    "pitch_val": 0,
+                    "roll_val": 0,
+                    "pitch_cor": "amarelo",
+                    "roll_cor": "amarelo",
+                    "pitch_rot": "NIVELADA",
+                    "pitch_hint": None,
+                    "pitch_nivel": 0,
+                    "roll_rot": "NIVELADA",
+                    "roll_hint": None,
+                    "roll_nivel": 0,
+                    "rot": "⚠ SEM DADOS",
+                    "status_cor": "amarelo",
+                    "raj": 0,
+                    "raj_cor": "verde",
+                    "wdir_adj": None,
+                    "wdir_lbl": None,
+                    "barometro": None,
+                    "vento_med": None,
+                    "vento_cor": "verde",
+                    "wind_source": None,
+                }
+
+        _render_html(est)
+        P5.abrir_html_no_navegador()
+
+        wind_alarm_state = {
+            "last_wind_alarm_ts": 0.0,
+            "next_wind_check_ts": time.monotonic() + P1.VENTO_ALARME_CHECK_INTERVAL_MIN * 60.0,
+        }
+
+        def verificar_alarme_vento(vento_val_atual, raj_val_atual):
+            now = time.monotonic()
+            try:
+                vento_num = None if (vento_val_atual is None) else float(vento_val_atual)
+                raj_num = None if (raj_val_atual is None) else float(raj_val_atual)
+            except Exception:
+                vento_num = raj_num = None
+            vento_acima = (vento_num is not None) and (vento_num > P1.VENTO_ALARME_THRESHOLD)
+            rajada_acima = (raj_num is not None) and (raj_num > P1.VENTO_ALARME_THRESHOLD)
+            if vento_acima or rajada_acima:
+                if (now - wind_alarm_state["last_wind_alarm_ts"]) >= (P1.VENTO_REARME_MIN * 60.0):
+                    P1.log_event("ALARM_WIND", vento=vento_num, raj=raj_num, threshold=P1.VENTO_ALARME_THRESHOLD)
+
+                    P1.tocar_alarme_vento()
+                    wind_alarm_state["last_wind_alarm_ts"] = now
+
+        wind_alarm_timer = threading.Timer(
+            9.0, lambda: verificar_alarme_vento(est.get("vento_med"), est.get("raj"))
+        )
+        wind_alarm_timer.daemon = True
+        wind_alarm_timer.start()
+
+        def processar_alarme_pitch_roll(est_local):
+            P5.processar_alarme_pitch_roll(est_local)
+
+        now_boot = time.monotonic()
+        if not hasattr(P5.alarm_state, "ultimo_random") or P5.alarm_state.ultimo_random <= 0:
+            P5.alarm_state.ultimo_random = now_boot
+
+        global _last_snap_ts
+        _last_snap_ts = time.monotonic() - SNAP_INTERVAL_SEC
+
+        while not STOP_EVENT.is_set():
+            t0 = time.monotonic()
+
+            if STOP_EVENT.is_set() or (P1._quit_evt and P1._quit_evt.is_signaled()):
+                encerrar_gracioso()
+                return
+            dados = _coletar_merged()
+            if not dados:
+                _render_html({
+                    "pitch_val": 0,
+                    "roll_val": 0,
+                    "pitch_cor": "amarelo",
+                    "roll_cor": "amarelo",
+                    "rot": "⚠ SEM DADOS",
+                    "raj": 0,
+                    "raj_cor": "verde",
+                    "status_cor": "amarelo",
+                    "wdir_adj": None,
+                    "barometro": None,
+                    "wdir_lbl": None,
+                    "vento_med": None,
+                    "vento_cor": "verde",
+                    "wind_source": None,
+                })
+            else:
+                est = P4.avaliar_de_json(dados)
+                now = time.monotonic()
+                _render_html(est)
+                if (now - _last_snap_ts) >= SNAP_INTERVAL_SEC:
+                    P1.log_snapshot(
+                        est.get("pitch_val"),
+                        est.get("roll_val"),
+                        est.get("vento_med"),
+                        est.get("raj"),
+                        est.get("wind_source"),
+                    )
+                    _last_snap_ts = now
+                processar_alarme_pitch_roll(est)
+                if (now - P5.alarm_state.ultimo_random) >= (P1.RANDOM_INTERVAL_HOURS * 3600):
+                    tempo_limite = now - (P1.RANDOM_SILENCE_PERIOD_MIN * 60)
+                    sem_alarmes = (
+                        P5.alarm_state.ultimo_alarme_l2 < tempo_limite
+                        and P5.alarm_state.ultimo_alarme_l3 < tempo_limite
+                        and P5.alarm_state.ultimo_alarme_l4 < tempo_limite
+                    )
+                    if sem_alarmes:
+                        P1.tocar_random()
+                        P5.alarm_state.ultimo_random = now
+                if now >= wind_alarm_state["next_wind_check_ts"]:
+                    wind_alarm_state["next_wind_check_ts"] = now + P1.VENTO_ALARME_CHECK_INTERVAL_MIN * 60.0
+                    verificar_alarme_vento(est.get("vento_med"), est.get("raj"))
+
+            elapsed = time.monotonic() - t0
+            rest = max(0.0, P1.COLETA_INTERVAL - elapsed)
+            if P1._quit_evt and getattr(P1._quit_evt, "handle", None) and P1.kernel32 is not None:
+                res = P1.kernel32.WaitForSingleObject(P1._quit_evt.handle, int(rest * 1000))
+                if res == P1.WAIT_OBJECT_0:
+                    encerrar_gracioso()
+                    return
+            else:
+                time.sleep(rest)
+
+        if wind_alarm_timer.is_alive():
+            wind_alarm_timer.cancel()
+    finally:
+        P1.log_event("RUN_STOP")
 
 
 def _main():
@@ -375,11 +268,13 @@ def _main():
         sys.exit(0)
 
     try:
+        P1.log_event("START")
         run_monitor()
     except KeyboardInterrupt:
         P1.log.info("Interrompido por KeyboardInterrupt; encerrando.")
     finally:
         encerrar_gracioso()
+        P1.log_event("STOP")
 
 
 if __name__ == "__main__":

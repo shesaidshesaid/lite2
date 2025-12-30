@@ -11,6 +11,8 @@ from typing import Iterable, List, Optional
 
 import _part1 as P1
 
+_LAST_WIND_HOST = None
+
 
 # =========================================================
 # Helpers
@@ -128,6 +130,7 @@ def rajada_ui_aux(d):
 # =========================================================
 
 def coletar_wind_com_fallback(tentativas: int = 1, timeout: int = 10):
+    global _LAST_WIND_HOST
     wind_pref = getattr(P1, "WIND_PREF", None)
     ordem = P1.ordered_wind_hosts(wind_pref)
 
@@ -170,6 +173,9 @@ def coletar_wind_com_fallback(tentativas: int = 1, timeout: int = 10):
         algum_host_ok = True
         d["_wind_source"] = host
         P1.log.info("Usando vento de %s (vm=%s, raj=%s).", host, vm, rj)
+        if host != _LAST_WIND_HOST:
+            P1.log_event("WIND_HOST", host=host, vm=vm_num, raj=rj_num, prev=_LAST_WIND_HOST)
+            _LAST_WIND_HOST = host
         return d
 
     if not algum_host_ok:

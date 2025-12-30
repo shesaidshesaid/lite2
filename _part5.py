@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 import webbrowser
@@ -309,19 +310,24 @@ class _ControlHandler(BaseHTTPRequestHandler):
             if path == "/mute":
                 mins = float(qs.get("mins", ["360"])[0])
                 until = _set_mute_L23_for_minutes(mins)
+                P1.log_event("MUTE", minutes=mins, until=until)
                 self._reply_json({"ok": True, "muted": True, "muted_until": until})
             elif path == "/unmute":
                 _clear_mute_L23()
+                P1.log_event("UNMUTE")
                 self._reply_json({"ok": True, "muted": False})
             elif path == "/mute_status":
                 self._reply_json({"ok": True, "muted": is_muted_L23(), "muted_until": MUTE_L23_UNTIL_TS})
             elif path == "/wind_pref":
+                prev = P1.WIND_PREF
                 if qs.get("host"):
                     val = qs.get("host", ["auto"])[0]
                     if val == "auto":
                         P1.WIND_PREF = None
                     else:
                         P1.WIND_PREF = val
+                if P1.WIND_PREF != prev:
+                    P1.log_event("WIND_PREF", host=P1.WIND_PREF)
                 self._reply_json({"ok": True, "host": P1.WIND_PREF})
             else:
                 self._reply_json({"ok": False, "error": "unknown"}, 404)
@@ -375,9 +381,10 @@ def gerar_html(
     rajada_txt = _fmt_or_dash(raj, "{:.2f}")
 
 
-    
+
 
     try:
+        os.makedirs(os.path.dirname(P1.FILES["html"]), exist_ok=True)
         with open(P1.FILES["html"], "w", encoding="utf-8") as f:
             f.write(
                 HTML_TPL.format(
