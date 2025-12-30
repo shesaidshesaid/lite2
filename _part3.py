@@ -101,6 +101,7 @@ def ler_ultimo_do_log():
 def salvar_log(p, r, raj):
     """Mantém retenção de LOG_RETENCAO_HRS horas e adiciona a linha atual."""
     global _last_log_compact_ts
+    P1.ensure_log_file_fresh(P1.FILES["log"], P1.LOG_ROTATE_INTERVAL_HRS)
     agora = datetime.now()
     linha_atual = f"{agora.strftime('%H:%M %d/%m/%Y')};{float(p):.3f};{float(r):.3f};{float(raj):.2f}"
 

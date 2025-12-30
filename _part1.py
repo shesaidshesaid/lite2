@@ -20,8 +20,7 @@ import tempfile
 from datetime import datetime
 
 from ctypes import wintypes
-from typing import Optional
-from logging.handlers import RotatingFileHandler
+from typing import Optional, SupportsFloat
 
 
 # =========================
@@ -64,9 +63,11 @@ L4_LEVELS = [
 ]
 
 JANELA_WIND_SEC, TOP_N_WIND = 120, 4
-LOG_RETENCAO_HRS, VENTO_ALARME_CHECK_INTERVAL_MIN = 48, 15
+LOG_RETENCAO_HRS, VENTO_ALARME_CHECK_INTERVAL_MIN = 36, 15
 VENTO_ALARME_THRESHOLD, VENTO_REARME_MIN = 21.0, 76
 MUTE_CTRL_PORT = 8765
+
+LOG_ROTATE_INTERVAL_HRS = 36
 
 URL_SMP_PITCH_ROLL = "http://smp18ocn01:8509/get/data?missingvalues=null"
 WIND_HOSTS_ORDER = ["smp18ocn01", "smp19ocn02", "smp35ocn01", "smp53ocn01"]
@@ -100,6 +101,80 @@ QUIT_EVENT_NAME = "Global\\PitchRollMonitorQuitEvent"
 # Diretórios (recursos x saída)
 # =========================
 IS_FROZEN = bool(getattr(sys, "frozen", False))
+
+
+def _can_write_in_dir(d: str) -> bool:
+    try:
+        os.makedirs(d, exist_ok=True)
+        test_path = os.path.join(d, ".__lite2_write_test.tmp")
+        with open(test_path, "w", encoding="utf-8") as f:
+            f.write("ok")
+        os.remove(test_path)
+        return True
+    except Exception:
+        return False
+
+
+def escolher_output_dir(app_name: str = "lite2") -> str:
+    """
+    Escolhe diretório efetivo para saída (logs/html) com fallback:
+      1) pasta do exe (frozen) ou do script
+      2) %LOCALAPPDATA%\lite2
+      3) %TEMP%\lite2
+    """
+    # 1) pasta do exe (frozen) ou do script
+    try:
+        base = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
+        if _can_write_in_dir(base):
+            return base
+    except Exception:
+        pass
+
+    # 2) LOCALAPPDATA
+    try:
+        lad = os.environ.get("LOCALAPPDATA")
+        if lad:
+            d = os.path.join(lad, app_name)
+            if _can_write_in_dir(d):
+                return d
+    except Exception:
+        pass
+
+    # 3) TEMP
+    try:
+        d = os.path.join(tempfile.gettempdir(), app_name)
+        os.makedirs(d, exist_ok=True)
+        return d
+    except Exception:
+        return os.getcwd()
+
+
+def ensure_log_file_fresh(path: str, max_age_hours: float = LOG_ROTATE_INTERVAL_HRS) -> None:
+    """Garante que o arquivo de log exista e seja truncado a cada max_age_hours."""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        stamp_path = f"{path}.stamp"
+        now = time.time()
+        try:
+            stamp_mtime = os.path.getmtime(stamp_path)
+            needs_rotate = (now - stamp_mtime) / 3600.0 >= max_age_hours
+        except FileNotFoundError:
+            needs_rotate = True
+        except Exception:
+            needs_rotate = False
+
+        if needs_rotate:
+            with open(path, "w", encoding="utf-8"):
+                pass
+            with open(stamp_path, "w", encoding="utf-8") as f:
+                f.write(str(int(now)))
+        elif not os.path.exists(path):
+            with open(path, "w", encoding="utf-8"):
+                pass
+    except Exception:
+        # logging não está garantido aqui; falhas não devem quebrar o app
+        pass
+
 
 # Onde está o script/exe (bom para localizar recursos quando não frozen)
 BASE_DIR = os.path.dirname(sys.executable) if IS_FROZEN else os.path.dirname(os.path.abspath(__file__))
@@ -151,7 +226,7 @@ def _setup_logging() -> logging.Logger:
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 
     try:
-        os.makedirs(os.path.dirname(FILES["events"]), exist_ok=True)
+        ensure_log_file_fresh(FILES["events"], LOG_ROTATE_INTERVAL_HRS)
         handler = logging.FileHandler(FILES["events"], encoding="utf-8")
     except Exception:
         handler = logging.StreamHandler(sys.stderr)
@@ -178,56 +253,6 @@ REGEX = {
     ),
 }
 
-# =========================
-# Helpers
-# =========================
-
-def _can_write_in_dir(d: str) -> bool:
-    try:
-        os.makedirs(d, exist_ok=True)
-        test_path = os.path.join(d, ".__lite2_write_test.tmp")
-        with open(test_path, "w", encoding="utf-8") as f:
-            f.write("ok")
-        os.remove(test_path)
-        return True
-    except Exception:
-        return False
-
-
-def escolher_output_dir(app_name: str = "lite2") -> str:
-    """
-    Escolhe diretório efetivo para saída (logs/html) com fallback:
-      1) pasta do exe (frozen) ou do script
-      2) %LOCALAPPDATA%\\lite2
-      3) %TEMP%\\lite2
-    """
-    # 1) pasta do exe (frozen) ou do script
-    try:
-        base = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
-        if _can_write_in_dir(base):
-            return base
-    except Exception:
-        pass
-
-    # 2) LOCALAPPDATA
-    try:
-        lad = os.environ.get("LOCALAPPDATA")
-        if lad:
-            d = os.path.join(lad, app_name)
-            if _can_write_in_dir(d):
-                return d
-    except Exception:
-        pass
-
-    # 3) TEMP
-    try:
-        d = os.path.join(tempfile.gettempdir(), app_name)
-        os.makedirs(d, exist_ok=True)
-        return d
-    except Exception:
-        return os.getcwd()
-
-
 def _now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -236,7 +261,7 @@ def append_log_line(line: str) -> None:
     """Append seguro no log único (não pode quebrar o monitor)."""
     try:
         path = FILES["events"]
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        ensure_log_file_fresh(path, LOG_ROTATE_INTERVAL_HRS)
         with open(path, "a", encoding="utf-8") as f:
             f.write(line.rstrip() + "\n")
     except Exception:
@@ -266,7 +291,7 @@ def log_snapshot(pitch, roll, vento_med, raj, wind_source=None) -> None:
     append_log_line("; ".join(parts))
 
 
-def safe_float(val: object, default: Optional[float] = None) -> Optional[float]:
+def safe_float(val: SupportsFloat | str | None, default: Optional[float] = None) -> Optional[float]:
     try:
         out = float(val)
         return out if math.isfinite(out) else default
@@ -470,7 +495,7 @@ def run_audio_sequence(seq_callable, nome: str = "audio_seq", timeout_s: float =
 
 
 def _carregar_wav(nome_base: str):
-    if not audio_ok:
+    if not audio_ok or pygame is None:
         return None
     path = os.path.join(AUDIO_DIR, f"{nome_base}.wav")
     try:
@@ -483,7 +508,7 @@ def _carregar_wav(nome_base: str):
 
 
 def _esperar_canal(canal, timeout_s: float = 10.0):
-    if not audio_ok or canal is None:
+    if not audio_ok or canal is None or pygame is None:
         return
     t0 = time.monotonic()
     while canal.get_busy():
@@ -653,6 +678,7 @@ __all__ = [
     "JANELA_WIND_SEC",
     "TOP_N_WIND",
     "LOG_RETENCAO_HRS",
+    "LOG_ROTATE_INTERVAL_HRS",
     "VENTO_ALARME_CHECK_INTERVAL_MIN",
     "VENTO_ALARME_THRESHOLD",
     "VENTO_REARME_MIN",
@@ -664,6 +690,8 @@ __all__ = [
     "KEYS_PR",
     "KEYS_WIND",
     "FILES",
+    "ensure_log_file_fresh",
+    "escolher_output_dir",
     "log",
     "REGEX",
     "keep_screen_on",

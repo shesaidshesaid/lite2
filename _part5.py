@@ -261,6 +261,8 @@ def refresh_html_now():
         if not d_pr and not d_wind:
             return False
         dados = merge_dados(d_pr, d_wind)
+        if dados is None:
+            return False
         est = P4.avaliar_de_json(dados)
         gerar_html(
             est["pitch_val"],
