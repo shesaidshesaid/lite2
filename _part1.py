@@ -85,17 +85,17 @@ COLETA_INTERVAL = 9
 
 
 
-RANDOM_INTERVAL_HOURS = 4
-RANDOM_SILENCE_PERIOD_MIN = 50
+RANDOM_INTERVAL_HOURS = 7
+RANDOM_SILENCE_PERIOD_MIN = 55
 
-VOLUMES = {"beep_l2": 0.07, "beep_l3": 0.09, "beep_l4": 0.15, "voz": 100, "beep_fallback": 0.07}
+VOLUMES = {"beep_l2": 0.07, "beep_l3": 0.09, "beep_l4": 0.55, "beep_l5": 0.95, "voz": 100, "beep_fallback": 0.07}
 
 FATOR_CORRECAO_PITCH = FATOR_CORRECAO_ROLL = 0.74
 AA_PITCH, AA_ROLL = 0.08, -0.08
 NIVELADA_POS, NIVELADA_NEG = 0.34, -0.34
 
-L2_LEVELS = [0.50, -0.50, 0.50, -0.50]
-L3_LEVELS = [0.90, -0.90, 0.90, -0.90]
+L2_LEVELS = [0.5, -0.5, 0.5, -0.5]
+L3_LEVELS = [0.9, -0.9, 0.9, -0.9]
 
 OFFSET_L4 = 0.45
 L4_LEVELS = [
@@ -103,6 +103,16 @@ L4_LEVELS = [
     L3_LEVELS[1] - OFFSET_L4,
     L3_LEVELS[2] + OFFSET_L4,
     L3_LEVELS[3] - OFFSET_L4,
+
+]
+
+OFFSET_L5 = 0.45
+L5_LEVELS = [
+    L4_LEVELS[0] + OFFSET_L5,
+    L4_LEVELS[1] - OFFSET_L5,
+    L4_LEVELS[2] + OFFSET_L5,
+    L4_LEVELS[3] - OFFSET_L5,
+    
 ]
 
 JANELA_WIND_SEC, TOP_N_WIND = 120, 4
@@ -586,7 +596,7 @@ def _tocar_em_canal(nome_base: str, vol01: float, canal_nome: str):
 def tocar_alerta(nivel_num: int):
     if not audio_ok:
         return
-    nome = f"l{min(nivel_num, 4)}" if nivel_num >= 2 else "l2"
+    nome = f"l{min(nivel_num, 5)}" if nivel_num >= 2 else "l2"
     snd = _SND.get(nome) or _carregar_wav(nome)
     if not snd:
         for fallback in ["l3", "l2"]:
@@ -614,10 +624,47 @@ def _combo_key(direcoes_upper: set):
             return key
     return None
 
+def _audio_file_exists(nome_base: str) -> bool:
+    """Evita warning do _carregar_wav quando o arquivo nem existe."""
+    try:
+        path = os.path.join(AUDIO_DIR, f"{nome_base}.wav")
+        return os.path.isfile(path)
+    except Exception:
+        return False
 
-def falar_wavs(direcoes, incluir_atencao: bool):
+
+def _ensure_sound_loaded(nome_base: str):
+    """
+    Garante que o som está carregado em _SND.
+    Só tenta carregar se o arquivo existir (para não poluir o log).
+    """
+    if _SND.get(nome_base):
+        return _SND.get(nome_base)
+    if not _audio_file_exists(nome_base):
+        return None
+    return _carregar_wav(nome_base)
+
+
+def _pick_sound_key(base_key: str, use_v2: bool) -> str:
+    """
+    Se use_v2=True tenta <base_key>2 primeiro; se não existir/carregar, cai no base_key.
+    """
+    if not use_v2:
+        return base_key
+
+    key2 = f"{base_key}2"
+    if _ensure_sound_loaded(key2):
+        return key2
+
+    # fallback para o original
+    return base_key
+
+
+
+def falar_wavs(direcoes, incluir_atencao: bool, use_v2: bool = False):
     if not audio_ok:
         return
+
     vol01 = clamp(VOLUMES.get("voz", 100) / 100.0, 0.0, 1.0)
     validos = {"PROA", "POPA", "BORESTE", "BOMBORDO"}
     dirs = [d.strip().upper() for d in (direcoes or []) if d and d.strip().upper() in validos]
@@ -628,28 +675,54 @@ def falar_wavs(direcoes, incluir_atencao: bool):
         except Exception:
             pass
 
+    # 1) Atenção (normal ou v2)
     if incluir_atencao:
         if _quit_evt and _quit_evt.is_signaled():
             return
-        _tocar_em_canal("atencao", vol01, "voz")
+        key = _pick_sound_key("atencao", use_v2)
+        _tocar_em_canal(key, vol01, "voz")
         time.sleep(0.12)
 
     if not dirs:
         return
 
+    # 2) Combo (normal ou v2)
     combo = _combo_key(set(dirs))
-    if combo and (_SND.get(combo) or _carregar_wav(combo)):
-        if _quit_evt and _quit_evt.is_signaled():
-            return
-        _tocar_em_canal(combo, vol01, "voz")
-    else:
-        for d in dirs:
+    if combo:
+        combo_key = _pick_sound_key(combo, use_v2)
+
+        # garante load sem warning se arquivo não existir
+        if _ensure_sound_loaded(combo_key):
             if _quit_evt and _quit_evt.is_signaled():
                 return
-            _tocar_em_canal(d.lower(), vol01, "voz")
-            time.sleep(0.12)
+            _tocar_em_canal(combo_key, vol01, "voz")
+            time.sleep(0.25)
+            return
+
+        # fallback: se pediu v2 e não existe, tenta o combo original (se existir)
+        if combo_key != combo and _ensure_sound_loaded(combo):
+            if _quit_evt and _quit_evt.is_signaled():
+                return
+            _tocar_em_canal(combo, vol01, "voz")
+            time.sleep(0.25)
+            return
+
+    # 3) Sem combo: toca individuais (normal ou v2)
+    for d in dirs:
+        if _quit_evt and _quit_evt.is_signaled():
+            return
+        base = d.lower()  # "popa", "proa", ...
+        key = _pick_sound_key(base, use_v2)
+
+        # se v2 não existir, cai para base automaticamente
+        if key != base and not _ensure_sound_loaded(key):
+            key = base
+
+        _tocar_em_canal(key, vol01, "voz")
+        time.sleep(0.12)
 
     time.sleep(0.25)
+
 
 
 def tocar_alarme_vento():
@@ -724,6 +797,7 @@ __all__ = [
     "L2_LEVELS",
     "L3_LEVELS",
     "L4_LEVELS",
+    "L5_LEVELS",
     "JANELA_WIND_SEC",
     "TOP_N_WIND",
     "LOG_RETENCAO_HRS",

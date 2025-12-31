@@ -30,13 +30,17 @@ def cor_raj(v):
     return "verde"
 
 
-def classif2(v, n4, n3, n2, niv_n, niv_p, p2, p3, p4, nomes):
+def classif2(v, n5, n4, n3, n2, niv_n, niv_p, p2, p3, p4, p5, nomes):
+    if v >= p5:
+        return nomes[0], "vermelho", None, 5
     if v >= p4:
         return nomes[0], "vermelho", None, 4
     if v >= p3:
         return nomes[0], "vermelho", None, 3
     if v >= p2:
         return nomes[0], "laranja", None, 2
+    if v <= n5:
+        return nomes[1], "vermelho", None, 5
     if v <= n4:
         return nomes[1], "vermelho", None, 4
     if v <= n3:
@@ -100,6 +104,7 @@ def _montar_rotulo_e_status(
 def avaliar_por_valores(pitch_val, roll_val, raj_val):
     pitch_rot, pitch_cor, pitch_hint, pitch_nivel = classif2(
         pitch_val,
+        P1.L5_LEVELS[1],
         P1.L4_LEVELS[1],
         P1.L3_LEVELS[1],
         P1.L2_LEVELS[1],
@@ -108,11 +113,13 @@ def avaliar_por_valores(pitch_val, roll_val, raj_val):
         P1.L2_LEVELS[0],
         P1.L3_LEVELS[0],
         P1.L4_LEVELS[0],
+        P1.L5_LEVELS[0],
         ("PROA", "POPA"),
     )
 
     roll_rot, roll_cor, roll_hint, roll_nivel = classif2(
         roll_val,
+        P1.L5_LEVELS[3],
         P1.L4_LEVELS[3],
         P1.L3_LEVELS[3],
         P1.L2_LEVELS[3],
@@ -121,6 +128,7 @@ def avaliar_por_valores(pitch_val, roll_val, raj_val):
         P1.L2_LEVELS[2],
         P1.L3_LEVELS[2],
         P1.L4_LEVELS[2],
+        P1.L5_LEVELS[2],
         ("BORESTE", "BOMBORDO"),
     )
 

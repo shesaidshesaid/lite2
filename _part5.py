@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from string import Template
+
 import json
 import os
 import threading
@@ -21,6 +23,10 @@ import _part2 as P2
 import _part4 as P4
 from _html_fallback import HTML_TPL
 
+import contextlib
+
+_CLIENT_ABORT_EXC = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
+
 
 # =========================================================
 # Alarm State (SIMPLIFICADO)
@@ -29,6 +35,47 @@ from _html_fallback import HTML_TPL
 ALARM_CONFIRM_SEC = 5.0
 ALARM_SILENCE_SEC = 11 * 60.0  # 11 minutos
 
+
+# =========================================================
+# LIVE VIEW (estado em memória para o painel HTTP + /data.json)
+# =========================================================
+
+_LIVE_LOCK = threading.Lock()
+_LIVE_VIEW: Dict[str, Any] = {
+    "last_epoch_ms": int(time.time() * 1000),
+    "rot": "⚠ SEM DADOS",
+    "status_cor": "amarelo",
+    "pitch_txt": "---",
+    "pitch_cor": "amarelo",
+    "roll_txt": "---",
+    "roll_cor": "amarelo",
+    "vento_med_txt": "---",
+    "vento_cor": "verde",
+    "rajada_txt": "---",
+    "rajada_cor": "verde",
+    "wdir_aj": "---",
+    "wdir_lbl": "---",
+    "barometro": "---",
+    "hora_html": "---",
+}
+
+WRITE_HTML_FILE = False  # <- desliga geração do pitch_roll.html
+
+
+
+def _get_live_view() -> Dict[str, Any]:
+    with _LIVE_LOCK:
+        return dict(_LIVE_VIEW)
+
+
+def _set_live_view(**kv) -> None:
+    with _LIVE_LOCK:
+        _LIVE_VIEW.update(kv)
+
+
+# =========================================================
+# Alarm confirmation helpers
+# =========================================================
 
 def _coletar_est_para_confirmacao():
     """Coleta uma leitura 'agora' para confirmar nível (sem depender do loop de 20s)."""
@@ -63,10 +110,9 @@ def _tocar_alarme_pitch_roll(nivel: int, est: dict) -> None:
 
     def _seq():
         P1.tocar_alerta(nivel)
-        P1.falar_wavs(cond, incluir_atencao=(nivel >= 3))
+        P1.falar_wavs(cond, incluir_atencao=(nivel >= 3), use_v2=(nivel >= 3))
 
     P1.run_audio_sequence(_seq, nome="pitch_roll")
-
 
 
 class AlarmState:
@@ -74,7 +120,7 @@ class AlarmState:
     Regras:
     - L0/L1: nunca toca
     - L2/L3/L4: só toca quando subir (nivel_atual > nivel_anterior)
-    - Após tocar nível N: silêncio por 8min para qualquer nível <= N
+    - Após tocar nível N: silêncio por 11min para qualquer nível <= N
     - Antes de tocar: confirmação após 5s (recoleta); toca nível confirmado (>=2)
     """
 
@@ -94,6 +140,7 @@ class AlarmState:
         self.ultimo_alarme_l2 = 0.0
         self.ultimo_alarme_l3 = 0.0
         self.ultimo_alarme_l4 = 0.0
+        self.ultimo_alarme_l5 = 0.0
         self.ultimo_random = 0.0
 
     def nivel_combinado(self, est: dict) -> int:
@@ -114,6 +161,8 @@ class AlarmState:
             self.ultimo_alarme_l3 = now
         elif nivel == 4:
             self.ultimo_alarme_l4 = now
+        elif nivel == 5:
+            self.ultimo_alarme_l5 = now    
 
     def _log_alarm_skip(self, reason: str, level: int, prev: int | None = None) -> None:
         P1.log_event("ALARM_SUPPRESS", reason=reason, level=level, prev=prev)
@@ -206,10 +255,10 @@ def processar_alarme_pitch_roll(est: dict) -> None:
     alarm_state.maybe_schedule(est)
 
 
-
 # =========================================================
 # Mute L2/L3 state + lock
 # =========================================================
+
 MUTE_L23_UNTIL_TS = 0.0
 _mute_lock = threading.Lock()
 
@@ -256,7 +305,11 @@ def merge_dados(d_pr: Optional[Dict[str, Any]], d_wind: Optional[Dict[str, Any]]
             dados["_wind_source"] = d_wind["_wind_source"]
 
     if not dados:
-        P1.log.warning("Merge retornou vazio apesar de entradas existirem (pr=%s, wind=%s).", bool(d_pr), bool(d_wind))
+        P1.log.warning(
+            "Merge retornou vazio apesar de entradas existirem (pr=%s, wind=%s).",
+            bool(d_pr),
+            bool(d_wind),
+        )
         P1.log_event("MERGE_EMPTY", pitch_roll=bool(d_pr), wind=bool(d_wind))
         return None
 
@@ -294,8 +347,9 @@ def refresh_html_now():
 
 
 # =========================================================
-# Control server
+# HTTP server
 # =========================================================
+
 class _ControlHandler(BaseHTTPRequestHandler):
     def log_message(self, *args, **kwargs):
         pass
@@ -305,29 +359,100 @@ class _ControlHandler(BaseHTTPRequestHandler):
 
     def _reply_json(self, obj: dict, code=200):
         data = json.dumps(obj).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.end_headers()
+            self.wfile.write(data)
+        except _CLIENT_ABORT_EXC:
+            # cliente (browser) cancelou/fechou/abortou: ignora
+            return
+        except Exception:
+            # se der erro real aqui, não tente responder novamente (pode gerar loop de erro)
+            P1.log.debug("Falha ao responder JSON", exc_info=True)
+            return
+
+   
+
+
+    def _reply_html(self, html: str, code: int = 200):
+        data = html.encode("utf-8")
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.end_headers()
+            self.wfile.write(data)
+        except _CLIENT_ABORT_EXC:
+            return
+        except Exception:
+            P1.log.debug("Falha ao responder HTML", exc_info=True)
+            return
+
 
     def do_GET(self):
         try:
             parsed = urlparse(self.path)
             path, qs = parsed.path, parse_qs(parsed.query or "")
+
+            # Painel HTTP principal
+            if path in ("/", "/index.html"):
+                view = _get_live_view()
+                html = Template(HTML_TPL).safe_substitute(
+                    refresh_ms=int(P1.HTML_REFRESH_SEC * 1000),
+                    stale_sec=int(P1.HTML_STALE_MAX_AGE_SEC),
+                    port=int(P1.MUTE_CTRL_PORT),
+                    last_epoch_ms=view.get("last_epoch_ms", int(time.time() * 1000)),
+                    rot=view.get("rot", "⚠ SEM DADOS"),
+                    status_cor=view.get("status_cor", "amarelo"),
+                    pitch_txt=view.get("pitch_txt", "---"),
+                    pitch_cor=view.get("pitch_cor", "amarelo"),
+                    roll_txt=view.get("roll_txt", "---"),
+                    roll_cor=view.get("roll_cor", "amarelo"),
+                    vento_med_txt=view.get("vento_med_txt", "---"),
+                    vento_cor=view.get("vento_cor", "verde"),
+                    rajada_txt=view.get("rajada_txt", "---"),
+                    rajada_cor=view.get("rajada_cor", "verde"),
+                    wdir_aj=view.get("wdir_aj", "---"),
+                    wdir_lbl=view.get("wdir_lbl", "---"),
+                    barometro=view.get("barometro", "---"),
+                    hora=view.get("hora_html", "---"),
+                )
+                self._reply_html(html, 200)
+                return
+
+            # Dados do painel (polling JS)
+            if path == "/data.json":
+                view = _get_live_view()
+                view = {"ok": True, **view}
+                self._reply_json(view, 200)
+                return
+
+            # Endpoints existentes
             if path == "/mute":
                 mins = float(qs.get("mins", ["360"])[0])
                 until = _set_mute_L23_for_minutes(mins)
                 P1.log_event("MUTE", minutes=mins, until=until)
                 self._reply_json({"ok": True, "muted": True, "muted_until": until})
-            elif path == "/unmute":
+                return
+
+            if path == "/unmute":
                 _clear_mute_L23()
                 P1.log_event("UNMUTE")
                 self._reply_json({"ok": True, "muted": False})
-            elif path == "/mute_status":
+                return
+
+            if path == "/mute_status":
                 self._reply_json({"ok": True, "muted": is_muted_L23(), "muted_until": MUTE_L23_UNTIL_TS})
-            elif path == "/wind_pref":
+                return
+
+            if path == "/wind_pref":
                 prev = P1.WIND_PREF
                 if qs.get("host"):
                     val = qs.get("host", ["auto"])[0]
@@ -338,10 +463,18 @@ class _ControlHandler(BaseHTTPRequestHandler):
                 if P1.WIND_PREF != prev:
                     P1.log_event("WIND_PREF", host=P1.WIND_PREF)
                 self._reply_json({"ok": True, "host": P1.WIND_PREF})
-            else:
-                self._reply_json({"ok": False, "error": "unknown"}, 404)
+                return
+
+            self._reply_json({"ok": False, "error": "unknown"}, 404)
+        except _CLIENT_ABORT_EXC:
+            return
         except Exception:
+            # Evita tentar responder numa conexão já quebrada
+            P1.log.debug("Exceção em do_GET", exc_info=True)
             self._reply_json({"ok": False, "error": "exception"}, 500)
+
+            return
+
 
 
 def start_control_server(port: int = P1.MUTE_CTRL_PORT):
@@ -354,7 +487,14 @@ def start_control_server(port: int = P1.MUTE_CTRL_PORT):
     return srv
 
 
-def _fmt_or_dash(val, fmt):
+
+
+
+# =========================================================
+# HTML writer + live state update
+# =========================================================
+
+def _fmt_or_dash(val, fmt: str) -> str:
     try:
         return fmt.format(float(val))
     except Exception:
@@ -377,69 +517,165 @@ def gerar_html(
     vento_cor="verde",
     wind_source: Optional[str] = None,
 ):
-    dt = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    dt_show = dt if not wind_source else f"{dt} <span style=\"font-size:.85em;opacity:.75\">(vento: {wind_source})</span>"
+    """
+    Atualiza:
+    1) Estado em memória (_LIVE_VIEW) -> painel HTTP (blindado)
+    2) Arquivo HTML (opcional). Se travar por OneDrive/lock, não derruba o painel HTTP.
+    """
+    last_epoch_ms = int(time.time() * 1000)
 
+    # textos já formatados (exibição)
     wdir_txt = _fmt_or_dash(wdir_aj, "{:.1f}")
     baro_txt = _fmt_or_dash(barometro, "{:.2f}")
     lbl_txt = "---" if (wdir_lbl is None or str(wdir_lbl).strip() == "") else str(wdir_lbl)
     vento_txt = _fmt_or_dash(vento_med, "{:.1f}")
-    last_epoch_ms = int(time.time() * 1000)
     pitch_txt = _fmt_or_dash(p, "{:.1f}")
     roll_txt = _fmt_or_dash(r, "{:.1f}")
     rajada_txt = _fmt_or_dash(raj, "{:.1f}")
 
+    dt = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    dt_show = dt if not wind_source else f'{dt} <span style="font-size:.85em;opacity:.75">(vento: {wind_source})</span>'
 
+    # Atualiza estado do painel HTTP (/data.json)
+    _set_live_view(
+        last_epoch_ms=last_epoch_ms,
+        rot=rot,
+        status_cor=status,
+        pitch_txt=pitch_txt,
+        pitch_cor=pc,
+        roll_txt=roll_txt,
+        roll_cor=rc,
+        vento_med_txt=vento_txt,
+        vento_cor=vento_cor,
+        rajada_txt=rajada_txt,
+        rajada_cor=rcor,
+        wdir_aj=wdir_txt,
+        wdir_lbl=lbl_txt,
+        barometro=baro_txt,
+        hora_html=dt_show,
+    )
 
-
+    # Mantém gravação do HTML em disco (1 arquivo)
     try:
-        os.makedirs(os.path.dirname(P1.FILES["html"]), exist_ok=True)
-        with open(P1.FILES["html"], "w", encoding="utf-8") as f:
-            f.write(
-                HTML_TPL.format(
-                    refresh_ms=P1.HTML_REFRESH_SEC * 1000,
-                    stale_sec=P1.HTML_STALE_MAX_AGE_SEC,
-                    last_epoch_ms=last_epoch_ms,
-                    rot=rot,
-                    pitch=p,
-                    roll=r,
-                    pitch_cor=pc,
-                    roll_cor=rc,
-                    rajada=raj,
-                    rajada_cor=rcor,
-                    vento_med_txt=vento_txt,
-                    vento_cor=vento_cor,
-                    status_cor=status,
-                    wdir_aj=wdir_txt,
-                    barometro=baro_txt,
-                    wdir_lbl=lbl_txt,
-                    hora=dt_show,
-                    port=P1.MUTE_CTRL_PORT,
-                    pitch_txt=pitch_txt,
-                    roll_txt=roll_txt,
-                    rajada_txt=rajada_txt,
+        html = Template(HTML_TPL).safe_substitute(
+            refresh_ms=int(P1.HTML_REFRESH_SEC * 1000),
+            stale_sec=int(P1.HTML_STALE_MAX_AGE_SEC),
+            last_epoch_ms=last_epoch_ms,
+            port=int(P1.MUTE_CTRL_PORT),
 
-                )
-            )
+            rot=rot,
+            status_cor=status,
+
+            pitch_cor=pc,
+            roll_cor=rc,
+            rajada_cor=rcor,
+            vento_cor=vento_cor,
+
+            pitch_txt=pitch_txt,
+            roll_txt=roll_txt,
+            rajada_txt=rajada_txt,
+            vento_med_txt=vento_txt,
+
+            wdir_aj=wdir_txt,
+            wdir_lbl=lbl_txt,
+            barometro=baro_txt,
+
+            hora=dt_show,
+        )
+
+        if WRITE_HTML_FILE:
+            try:
+                out_dir = os.path.dirname(P1.FILES["html"]) or "."
+                os.makedirs(out_dir, exist_ok=True)
+                with open(P1.FILES["html"], "w", encoding="utf-8") as f:
+                    f.write(html)
+            except Exception:
+                P1.log.exception("Falha ao gravar HTML em %s", P1.FILES.get("html"))
+
     except Exception:
         P1.log.exception("Falha ao gravar HTML em %s", P1.FILES.get("html"))
 
 
 def abrir_html_no_navegador():
+    """Abre o painel HTTP (mais blindado, sem file:// e sem reload)."""
+    try:
+        url = f"http://127.0.0.1:{P1.MUTE_CTRL_PORT}/"
+        webbrowser.open(url, new=0, autoraise=True)
+    except Exception:
+        pass
+
+
+def abrir_html_file_no_navegador():
+    """Opcional: abre o HTML por file:// (fallback/manual)."""
     try:
         uri = Path(P1.FILES["html"]).resolve().as_uri()
         webbrowser.open(uri, new=0, autoraise=True)
     except Exception:
         pass
 
+from pathlib import Path
+import os
+import sys
+
+def ensure_http_shortcut() -> None:
+    """
+    Cria um atalho .url ao lado do executável (ou ao lado do script quando em dev).
+    Muito mais estável em Windows corporativo do que tentar Desktop/OneDrive.
+    """
+    try:
+        url = f"http://127.0.0.1:{int(P1.MUTE_CTRL_PORT)}/"
+    except Exception:
+        url = "http://127.0.0.1:8765/"
+
+    # 1) Descobre a pasta "do app":
+    # - Empacotado (PyInstaller): ao lado do .exe (sys.executable)
+    # - Em dev: ao lado do arquivo .py atual (ou cwd como fallback)
+    try:
+        if getattr(sys, "frozen", False) and hasattr(sys, "executable"):
+            base_dir = Path(sys.executable).resolve().parent
+        else:
+            base_dir = Path(__file__).resolve().parent
+    except Exception:
+        base_dir = Path.cwd()
+
+    shortcut_path = base_dir / "Pitch & Roll - Painel.url"
+
+    content = "\n".join([
+        "[InternetShortcut]",
+        f"URL={url}",
+        "IconIndex=0",
+        "IconFile=C:\\Windows\\System32\\url.dll",
+        "",
+    ])
+
+    try:
+        # evita regravar se já está igual
+        if shortcut_path.exists():
+            try:
+                old = shortcut_path.read_text(encoding="utf-8", errors="ignore")
+                if old.strip() == content.strip():
+                    return
+            except Exception:
+                pass
+
+        shortcut_path.write_text(content, encoding="utf-8")
+        P1.log_event("HTTP_SHORTCUT", path=str(shortcut_path), url=url)
+    except Exception:
+        P1.log.debug("Falha ao criar atalho .url ao lado do executável", exc_info=True)
+
+
+
 
 __all__ = [
     "AlarmState",
     "alarm_state",
+    "processar_alarme_pitch_roll",
     "is_muted_L23",
     "start_control_server",
     "merge_dados",
+    "ensure_http_shortcut",
     "refresh_html_now",
     "gerar_html",
     "abrir_html_no_navegador",
+    "abrir_html_file_no_navegador",
 ]

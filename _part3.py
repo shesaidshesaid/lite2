@@ -18,6 +18,8 @@ import _part4 as P4
 import _part5 as P5
 import threading
 
+from _part5 import ensure_http_shortcut
+
 
 STOP_EVENT = threading.Event()
 SNAP_INTERVAL_SEC = 120     # 2 minutos
@@ -27,6 +29,9 @@ _last_snap_ts = 0.0
 
 
 from typing import Optional, Tuple
+
+
+
 
 def ler_ultimo_do_log() -> Optional[Tuple[float, float, float]]:
     """Retorna (pitch, roll, rajada) do último registro válido (linha SNAP)."""
@@ -237,6 +242,7 @@ def run_monitor():
                         P5.alarm_state.ultimo_alarme_l2 < tempo_limite
                         and P5.alarm_state.ultimo_alarme_l3 < tempo_limite
                         and P5.alarm_state.ultimo_alarme_l4 < tempo_limite
+                        and P5.alarm_state.ultimo_alarme_l5 < tempo_limite
                     )
                     if sem_alarmes:
                         P1.tocar_random()
@@ -263,8 +269,8 @@ def run_monitor():
 
 def _main():
     P1.keep_screen_on(True)
-    P5.start_control_server(P1.MUTE_CTRL_PORT)
     atexit.register(lambda: P1.keep_screen_on(False))
+
     ap = P1.base_argparser()
     args = ap.parse_args()
 
@@ -275,6 +281,7 @@ def _main():
         sys.exit(0)
 
     ja_existe, _ = P1.obter_mutex()
+
     try:
         P1._quit_evt = P1.QuitEvent()
         P1._quit_evt.create()
@@ -283,9 +290,17 @@ def _main():
 
     if ja_existe:
         ok = P1.signal_quit()
-        msg = "Outra instância já está rodando. Enviei sinal para encerrar." if ok else "Outra instância já está rodando; não consegui sinalizar. Use --stop."
+        msg = (
+            "Outra instância já está rodando. Enviei sinal para encerrar."
+            if ok else
+            "Outra instância já está rodando; não consegui sinalizar. Use --stop."
+        )
         print(msg)
         sys.exit(0)
+
+    # Só aqui faz sentido iniciar servidor + criar atalho
+    P5.start_control_server(P1.MUTE_CTRL_PORT)
+    P5.ensure_http_shortcut()
 
     try:
         P1.log_event("START")
@@ -295,6 +310,7 @@ def _main():
     finally:
         encerrar_gracioso()
         P1.log_event("STOP")
+
 
 
 if __name__ == "__main__":
