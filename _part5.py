@@ -696,6 +696,93 @@ def ensure_http_shortcut(port: int | None = None) -> None:
     except Exception:
         # Se qualquer coisa falhar, não derruba o app
         return
+    
+
+import base64
+import subprocess
+from pathlib import Path
+
+def _can_write_dir(d: str) -> bool:
+    try:
+        Path(d).mkdir(parents=True, exist_ok=True)
+        test = Path(d) / ".__writetest.tmp"
+        test.write_text("ok", encoding="utf-8")
+        test.unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
+
+
+def _choose_shortcut_dir() -> Path:
+    """
+    Onde criar o atalho.
+    1) Ao lado do executável/script (mais fácil pro usuário achar)
+    2) OUTPUT_DIR (sempre gravável)
+    3) Desktop do usuário (fallback)
+    """
+    # 1) lado do exe/script
+    try:
+        base_dir = Path(P1.BASE_DIR)  # você já tem BASE_DIR no P1
+        if _can_write_dir(str(base_dir)):
+            return base_dir
+    except Exception:
+        pass
+
+    # 2) OUTPUT_DIR
+    try:
+        out_dir = Path(P1.OUTPUT_DIR)
+        if _can_write_dir(str(out_dir)):
+            return out_dir
+    except Exception:
+        pass
+
+    # 3) Desktop
+    home = Path(os.environ.get("USERPROFILE", str(Path.home())))
+    desktop = home / "Desktop"
+    return desktop
+
+
+def ensure_log_shortcut() -> None:
+    """
+    Cria um atalho .lnk que abre o arquivo de log (lite2_events.log).
+    Nome do atalho: <nome_do_arquivo>.lnk  (ex: lite2_events.log.lnk)
+    """
+    try:
+        target = Path(P1.FILES["events"]).resolve()
+        # garante que o arquivo exista (ao menos vazio), para o atalho não "apontar para nada"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists():
+            target.write_text("", encoding="utf-8")
+
+        shortcut_dir = _choose_shortcut_dir()
+        shortcut_name = f"{target.name}.lnk"  # "lite2_events.log.lnk"
+        lnk_path = (shortcut_dir / shortcut_name).resolve()
+
+        # PowerShell: cria/atualiza o .lnk apontando para o arquivo
+        ps = f"""
+        $WshShell = New-Object -ComObject WScript.Shell
+        $Shortcut = $WshShell.CreateShortcut('{str(lnk_path)}')
+        $Shortcut.TargetPath = '{str(target)}'
+        $Shortcut.WorkingDirectory = '{str(target.parent)}'
+        $Shortcut.WindowStyle = 1
+        $Shortcut.Save()
+        """
+
+        # -EncodedCommand (UTF-16LE) evita problemas de aspas/caminhos com espaços
+        enc = base64.b64encode(ps.encode("utf-16le")).decode("ascii")
+
+        subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        P1.log.info("Atalho do log garantido em: %s -> %s", lnk_path, target)
+
+    except Exception:
+        P1.log.debug("Falha ao criar atalho do log", exc_info=True)
+
 
 
 

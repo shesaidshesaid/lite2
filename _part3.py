@@ -304,6 +304,9 @@ def _main():
 
     P5.start_control_server(P1.MUTE_CTRL_PORT)
 
+    # ✅ AQUI: cria/atualiza o atalho do log (uma vez, só na instância “dona”)
+    P5.ensure_log_shortcut()
+
     try:
         P1.log_event("START")
         run_monitor()
@@ -312,8 +315,6 @@ def _main():
     finally:
         encerrar_gracioso()
         P1.log_event("STOP")
-
-
 
 
 if __name__ == "__main__":
