@@ -1,0 +1,254 @@
+Perfeito. Abaixo está um **guia passo a passo, do zero**, **pronto para copiar e colar**, cobrindo **todo o fluxo Git** para conectar seu projeto local no VS Code ao repositório remoto:
+
+👉 Repositório: [https://github.com/shesaidshesaid/aplatquente2](https://github.com/shesaidshesaid/aplatquente2)
+👉 Plataforma: GitHub
+👉 Ambiente: Windows + PowerShell + VS Code
+
+---
+
+# GUIA COMPLETO — DO ZERO ATÉ O `git push`
+
+## 0) Pré-requisitos (checagem rápida)
+
+No terminal do VS Code (PowerShell):
+
+```powershell
+git --version
+```
+
+Se responder com versão, está OK.
+
+---
+
+## 1) Abrir o projeto no VS Code
+
+* Abra o **VS Code**
+* **File → Open Folder**
+* Selecione a pasta do projeto **aplatquente2**
+* Abra o **Terminal** integrado (Ctrl + `)
+
+---
+
+## 2) Inicializar o Git no projeto (local)
+
+Dentro da pasta do projeto:
+
+```powershell
+git init
+```
+
+Resultado esperado:
+
+```
+Initialized empty Git repository
+```
+
+---
+
+## 3) Configurar identidade (uma vez por máquina)
+
+Se ainda não tiver configurado:
+
+```powershell
+git config --global user.name "Seu Nome"
+git config --global user.email "seu@email.com"
+```
+
+Conferir:
+
+```powershell
+git config --global --list
+```
+
+---
+
+## 4) Conferir status inicial
+
+```powershell
+git status
+```
+
+Você deve ver vários arquivos como **untracked** (normal).
+
+---
+
+## 5) Criar `.gitignore` (ALTAMENTE RECOMENDADO)
+
+Crie um arquivo `.gitignore` na raiz com, no mínimo:
+
+```
+venv/
+.venv/
+__pycache__/
+*.pyc
+.env
+*.log
+```
+
+Salve o arquivo.
+
+---
+
+## 6) Adicionar arquivos ao stage
+
+Adicionar **tudo que faz parte do projeto**:
+
+```powershell
+git add .
+```
+
+Conferir:
+
+```powershell
+git status
+```
+
+Agora deve aparecer:
+
+```
+Changes to be committed
+```
+
+---
+
+## 7) Primeiro commit (obrigatório)
+
+```powershell
+git commit -m "Initial commit: estrutura base do projeto"
+```
+
+---
+
+## 8) Conectar ao repositório remoto (GitHub)
+
+⚠️ Faça **exatamente uma vez**:
+
+```powershell
+git remote add origin https://github.com/shesaidshesaid/aplatquente2.git
+```
+
+Conferir:
+
+```powershell
+git remote -v
+```
+
+---
+
+## 9) Garantir branch `main`
+
+```powershell
+git branch -M main
+```
+
+---
+
+## 10) Enviar para o GitHub (push inicial)
+
+```powershell
+git push -u origin main
+```
+
+* O `-u` cria o vínculo entre `main` local e remoto
+* Depois disso, `git push` simples já funciona
+
+---
+
+## 11) Fluxo NORMAL de trabalho (dia a dia)
+
+Sempre que fizer alterações:
+
+### 11.1 Ver o que mudou
+
+```powershell
+git status
+```
+
+### 11.2 Adicionar mudanças
+
+```powershell
+git add .
+```
+
+(ou arquivo específico)
+
+```powershell
+git add arquivo.py
+```
+
+### 11.3 Commitar
+
+```powershell
+git commit -m "Descrição clara do que foi feito"
+```
+
+### 11.4 Enviar ao GitHub
+
+```powershell
+git push
+```
+
+---
+
+## 12) Conferir no GitHub
+
+Abra:
+[https://github.com/shesaidshesaid/aplatquente2](https://github.com/shesaidshesaid/aplatquente2)
+
+Você deve ver:
+
+* arquivos
+* commits
+* histórico
+
+---
+
+## 13) Comandos essenciais (resumo rápido)
+
+```powershell
+git status        # ver estado
+git add .         # preparar mudanças
+git commit -m ""  # salvar versão
+git push          # enviar ao GitHub
+git pull          # baixar atualizações (se houver)
+```
+
+---
+
+## 14) O que NÃO fazer agora
+
+* ❌ Não mexer em branch (você já deixou claro)
+* ❌ Não usar `--force`
+* ❌ Não apagar `.git` da pasta
+* ❌ Não commitar `venv`
+
+---
+
+## 15) Estado IDEAL final
+
+Quando tudo estiver correto:
+
+```powershell
+git status
+```
+
+Resultado:
+
+```
+On branch main
+Your branch is up to date with 'origin/main'.
+nothing to commit, working tree clean
+```
+
+---
+
+## Próximo passo (se quiser)
+
+Posso:
+
+* revisar seu **.gitignore** para Python profissional
+* sugerir **padrão de commits** (WIP / STABLE / REFINE)
+* validar se o repositório está **nota 10 para produção**
+* te guiar no **clone em outra máquina**
+
+Se quiser, diga **em que passo você está agora**.

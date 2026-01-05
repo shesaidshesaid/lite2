@@ -13,14 +13,16 @@ git commit -m "STABLE: descrição curta do que está OK"
 
 3) Criar a TAG (save point):
 
-git tag -a v2025-12-28-0600html-ok -m "Versão estável"
+git tag -a v2026-01-01-2100html-ok -m "Versão estável aplqt"
+git tag -a v2026-01-05-0000html-ok -m "Versão estável pitchrl"
+
 
 
 
 4) Enviar para o GitHub:
 
 git push origin main
-git push origin v2025-12-28-0600html-ok
+git push origin v2026-01-05-0000html-ok
 
 Conferir qual tag está “em cima” do código atual:
 
@@ -36,14 +38,45 @@ git pull origin main
 Restaurar uma versão salva (tag)
 Ver código exatamente como estava na tag:
 
-git checkout v2025-01-27-2359html-ok
+git checkout v2026-01-05-0100html-ok
 
 Voltar o main para a tag (quando você trabalha sozinho):
 
 git checkout main
-git reset --hard v2025-01-27-2359html-ok
+git reset --hard v2026-05-01-0000html-ok
 git push origin main --force
+
+
+3. Procedimento COMPLETO e CORRETO (copiar e colar)
+
+Se o objetivo é:
+
+“Quero que o main fique exatamente igual ao que estava salvo na tag, sem sobrar nada.”
+
+Faça assim:
+
+# 1. Garantir que você está na main
+git checkout main
+
+# 2. Resetar a main exatamente para a tag
+git reset --hard v2026-01-05-0100html-ok
+
+# 3. (Opcional, mas recomendado) remover arquivos não versionados
+git clean -fd
+
+# 4. Conferir
+git status
+git log --oneline -1
+
+# 5. Forçar o push (você trabalha sozinho)
+git push origin main --force
+
+git checkout main
+
+
 
 Empacotar 
 
 pyinstaller --noconfirm --clean --onefile --noconsole --name lite2 --add-data "audioss;audioss" --collect-all pygame --collect-all requests lite2.py
+
+

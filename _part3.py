@@ -277,10 +277,6 @@ def _main():
         print(msg)
         sys.exit(0)
 
-    # ANTES do mutex: se estiver no OneDrive, copia/relança do LocalAppData e sai.
-    # Também cria o atalho do painel.
-    P5.ensure_http_shortcut(P1.MUTE_CTRL_PORT)
-
     P1.keep_screen_on(True)
     atexit.register(lambda: P1.keep_screen_on(False))
 
@@ -302,10 +298,12 @@ def _main():
         print(msg)
         sys.exit(0)
 
+    # Inicia servidor
     P5.start_control_server(P1.MUTE_CTRL_PORT)
 
-    # ✅ AQUI: cria/atualiza o atalho do log (uma vez, só na instância “dona”)
-    P5.ensure_log_shortcut()
+    # Cria atalhos (AGORA, já com FILES e logging prontos)
+    P5.ensure_http_shortcut(P1.MUTE_CTRL_PORT)
+    P5.ensure_log_shortcut(P1.FILES["events"])
 
     try:
         P1.log_event("START")
@@ -316,6 +314,3 @@ def _main():
         encerrar_gracioso()
         P1.log_event("STOP")
 
-
-if __name__ == "__main__":
-    _main()

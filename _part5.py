@@ -119,9 +119,9 @@ class AlarmState:
     """
     Regras:
     - L0/L1: nunca toca
-    - L2/L3/L4: só toca quando subir (nivel_atual > nivel_anterior)
+    - L2/L3/L4/L5: só toca quando subir (nivel_atual > nivel_anterior)
     - Após tocar nível N: silêncio por 11min para qualquer nível <= N
-    - Antes de tocar: confirmação após 5s (recoleta); toca nível confirmado (>=2)
+    - Confirmação dupla: 5s + 5s (duas recoletas) antes de tocar
     """
 
     def __init__(self):
@@ -131,12 +131,14 @@ class AlarmState:
         self.silence_level = 0
         self.silence_until = 0.0
 
-        # confirmação pendente
-        self.confirm_pending = False
-        self._confirm_timer = None
+        # confirmação em 2 estágios
+        self.confirm_stage = 0  # 0=nenhuma, 1=aguardando 1a confirmação, 2=aguardando 2a confirmação
+        self._confirm_timer1 = None
+        self._confirm_timer2 = None
+
         self._lock = threading.Lock()
 
-        # mantém compatibilidade com o resto do runtime (random)
+        # compat
         self.ultimo_alarme_l2 = 0.0
         self.ultimo_alarme_l3 = 0.0
         self.ultimo_alarme_l4 = 0.0
@@ -162,7 +164,7 @@ class AlarmState:
         elif nivel == 4:
             self.ultimo_alarme_l4 = now
         elif nivel == 5:
-            self.ultimo_alarme_l5 = now    
+            self.ultimo_alarme_l5 = now
 
     def _log_alarm_skip(self, reason: str, level: int, prev: int | None = None) -> None:
         P1.log_event("ALARM_SUPPRESS", reason=reason, level=level, prev=prev)
@@ -174,7 +176,7 @@ class AlarmState:
 
         with self._lock:
             prev = self.nivel_anterior
-            self.nivel_anterior = nivel  # sempre atualiza a referência anterior
+            self.nivel_anterior = nivel
 
             # L0/L1 nunca tocam
             if nivel < 2:
@@ -184,67 +186,104 @@ class AlarmState:
             if nivel <= prev:
                 return
 
-            # Se já existe confirmação em andamento, não empilha
-            if self.confirm_pending:
-                self._log_alarm_skip("confirm_pending", nivel, prev)
-                return
-
             # Respeita silêncio (11 min) para <= nível silenciado
             if self._is_silenced_locked(nivel, now):
                 self._log_alarm_skip("silenced", nivel, prev)
                 return
 
-            # Mantém sua lógica atual de mute manual L2/L3 (L4 continua podendo tocar)
+            # Mantém mute manual L2/L3
             if nivel <= 3 and is_muted_L23():
                 self._log_alarm_skip("muted_L23", nivel, prev)
                 return
 
-            # Agenda confirmação (5s)
-            self.confirm_pending = True
-            self._confirm_timer = threading.Timer(ALARM_CONFIRM_SEC, self._confirm_and_alarm)
-            self._confirm_timer.daemon = True
-            self._confirm_timer.start()
+            # Se já existe confirmação em andamento, não empilha
+            if self.confirm_stage != 0:
+                self._log_alarm_skip("confirm_pending", nivel, prev)
+                return
 
-    def _confirm_and_alarm(self) -> None:
+            # Agenda 1ª confirmação (5s)
+            self.confirm_stage = 1
+            self._confirm_timer1 = threading.Timer(ALARM_CONFIRM_SEC, self._confirm_stage1)
+            self._confirm_timer1.daemon = True
+            self._confirm_timer1.start()
+
+    def _confirm_stage1(self) -> None:
         try:
-            # se estiver encerrando, não toca nada
             if P1._quit_evt and P1._quit_evt.is_signaled():
                 self._log_alarm_skip("quit_signal", level=0)
                 return
 
             est2 = _coletar_est_para_confirmacao()
             if not est2:
-                self._log_alarm_skip("confirm_no_data", level=0)
+                self._log_alarm_skip("confirm1_no_data", level=0)
                 return
 
             nivel2 = self.nivel_combinado(est2)
-
-            # confirmação caiu para L0/L1 -> não toca
             if nivel2 < 2:
-                self._log_alarm_skip("confirm_low_level", level=nivel2)
+                self._log_alarm_skip("confirm1_low_level", level=nivel2)
                 return
 
-            # respeita mute manual L2/L3 na confirmação também
             if nivel2 <= 3 and is_muted_L23():
-                self._log_alarm_skip("confirm_muted_L23", level=nivel2)
+                self._log_alarm_skip("confirm1_muted_L23", level=nivel2)
                 return
 
             now = self._now()
             with self._lock:
-                # silêncio é sagrado
                 if self._is_silenced_locked(nivel2, now):
-                    self._log_alarm_skip("confirm_silenced", level=nivel2)
+                    self._log_alarm_skip("confirm1_silenced", level=nivel2)
                     return
 
-                # aplica silêncio ANTES de tocar, para evitar duplicidade enquanto toca
-                self._apply_silence_locked(nivel2, now)
+                # Agenda 2ª confirmação
+                self.confirm_stage = 2
+                self._confirm_timer2 = threading.Timer(ALARM_CONFIRM_SEC, self._confirm_stage2)
+                self._confirm_timer2.daemon = True
+                self._confirm_timer2.start()
 
-            _tocar_alarme_pitch_roll(nivel2, est2)
+        finally:
+            # se não avançou para estágio 2, libera
+            with self._lock:
+                if self.confirm_stage == 1:
+                    self.confirm_stage = 0
+                self._confirm_timer1 = None
+
+    def _confirm_stage2(self) -> None:
+        try:
+            if P1._quit_evt and P1._quit_evt.is_signaled():
+                self._log_alarm_skip("quit_signal", level=0)
+                return
+
+            est3 = _coletar_est_para_confirmacao()
+            if not est3:
+                self._log_alarm_skip("confirm2_no_data", level=0)
+                return
+
+            nivel3 = self.nivel_combinado(est3)
+            if nivel3 < 2:
+                self._log_alarm_skip("confirm2_low_level", level=nivel3)
+                return
+
+            if nivel3 <= 3 and is_muted_L23():
+                self._log_alarm_skip("confirm2_muted_L23", level=nivel3)
+                return
+
+            now = self._now()
+            with self._lock:
+                if self._is_silenced_locked(nivel3, now):
+                    self._log_alarm_skip("confirm2_silenced", level=nivel3)
+                    return
+
+                # aplica silêncio ANTES de tocar
+                self._apply_silence_locked(nivel3, now)
+
+            _tocar_alarme_pitch_roll(nivel3, est3)
 
         finally:
             with self._lock:
-                self.confirm_pending = False
-                self._confirm_timer = None
+                self.confirm_stage = 0
+                self._confirm_timer1 = None
+                self._confirm_timer2 = None
+
+
 
 
 alarm_state = AlarmState()
@@ -613,175 +652,183 @@ def abrir_html_file_no_navegador():
     except Exception:
         pass
 
-from pathlib import Path
 import os
-import sys
-
-import os
-import sys
-import shutil
 import subprocess
+import sys
 from pathlib import Path
 
-def _is_probably_onedrive_path(p: Path) -> bool:
-    s = str(p).lower()
-    return ("\\onedrive" in s) or ("/onedrive" in s)
-
-def _write_url_shortcut(dst: Path, url: str) -> None:
-    content = "[InternetShortcut]\nURL={}\n".format(url)
-    dst.write_text(content, encoding="utf-8")
-
-def ensure_http_shortcut(port: int | None = None) -> None:
+def _desktop_dir() -> Path:
     """
-    - Cria atalho do painel HTTP (.url) ao lado do executável (e também no Desktop, se existir).
-    - Se estiver rodando de dentro do OneDrive (PyInstaller), copia o exe para LocalAppData e relança.
+    Tenta achar o Desktop real (muitas vezes é redirecionado para OneDrive).
     """
-    if port is None:
-        port = int(getattr(P1, "MUTE_CTRL_PORT", 8765))
+    userprofile = os.environ.get("USERPROFILE") or str(Path.home())
+    candidates = []
 
-    url = f"http://127.0.0.1:{port}/"
+    # Desktop “normal”
+    candidates.append(Path(userprofile) / "Desktop")
 
-    frozen = bool(getattr(sys, "frozen", False))
-    if not frozen:
-        # Em modo dev (python), só cria atalho do painel ao lado do script
+    # Desktop redirecionado para OneDrive (corporativo)
+    odc = os.environ.get("OneDriveCommercial")
+    if odc:
+        candidates.append(Path(odc) / "Desktop")
+
+    od = os.environ.get("OneDrive")
+    if od:
+        candidates.append(Path(od) / "Desktop")
+
+    for d in candidates:
         try:
-            here = Path(__file__).resolve().parent
-            _write_url_shortcut(here / "Lite2 (Painel).url", url)
+            if d.exists():
+                return d
         except Exception:
             pass
-        return
 
-    src_exe = Path(sys.executable).resolve()
+    # fallback
+    return Path(userprofile) / "Desktop"
 
-    # 1) Sempre tenta criar o .url ao lado do executável atual
+
+def _side_dir() -> Path:
+    """
+    Diretório 'ao lado' do executável/entrypoint.
+    - Se empacotado com PyInstaller (`sys.frozen`), usa `sys.executable`.
+    - Caso contrário, tenta usar `sys.argv[0]` ou o diretório deste arquivo.
+    Fallback: `Path.cwd()`.
+    """
     try:
-        _write_url_shortcut(src_exe.parent / "Lite2 (Painel).url", url)
-    except Exception:
-        pass
+        # PyInstaller / cx_Freeze executável
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable).parent
 
-    # 2) Também tenta no Desktop (pode ser redirecionado, mas é só 1 arquivo)
-    try:
-        desk = Path.home() / "Desktop"
-        if desk.exists():
-            _write_url_shortcut(desk / "Lite2 (Painel).url", url)
-    except Exception:
-        pass
-
-    # 3) Se o exe está em OneDrive, copia para LocalAppData e relança de lá
-    try:
-        local_base = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "Lite2"
-        bin_dir = local_base / "bin"
-        bin_dir.mkdir(parents=True, exist_ok=True)
-        dst_exe = bin_dir / src_exe.name
-
-        if _is_probably_onedrive_path(src_exe):
-            # copia (ou atualiza) e relança
+        # Se invocado como script, tenta argv[0]
+        if len(sys.argv) > 0 and sys.argv[0]:
             try:
-                need_copy = (not dst_exe.exists()) or (dst_exe.stat().st_size != src_exe.stat().st_size)
-            except Exception:
-                need_copy = True
-
-            if need_copy:
-                shutil.copy2(src_exe, dst_exe)
-
-            # cria também o .url ao lado do exe local (para ficar “bem direto”)
-            try:
-                _write_url_shortcut(dst_exe.parent / "Lite2 (Painel).url", url)
+                p = Path(sys.argv[0]).resolve()
+                if p.exists():
+                    return p.parent
             except Exception:
                 pass
 
-            subprocess.Popen([str(dst_exe)], cwd=str(dst_exe.parent), close_fds=True)
-            raise SystemExit(0)
-
+        # Usa o diretório deste módulo como última opção
+        try:
+            return Path(__file__).resolve().parent
+        except Exception:
+            return Path.cwd()
     except Exception:
-        # Se qualquer coisa falhar, não derruba o app
-        return
-    
-
-import base64
-import subprocess
-from pathlib import Path
-
-def _can_write_dir(d: str) -> bool:
-    try:
-        Path(d).mkdir(parents=True, exist_ok=True)
-        test = Path(d) / ".__writetest.tmp"
-        test.write_text("ok", encoding="utf-8")
-        test.unlink(missing_ok=True)
-        return True
-    except Exception:
-        return False
+        return Path.cwd()
 
 
-def _choose_shortcut_dir() -> Path:
+def ensure_http_shortcut(port: int = 8765) -> None:
     """
-    Onde criar o atalho.
-    1) Ao lado do executável/script (mais fácil pro usuário achar)
-    2) OUTPUT_DIR (sempre gravável)
-    3) Desktop do usuário (fallback)
-    """
-    # 1) lado do exe/script
-    try:
-        base_dir = Path(P1.BASE_DIR)  # você já tem BASE_DIR no P1
-        if _can_write_dir(str(base_dir)):
-            return base_dir
-    except Exception:
-        pass
-
-    # 2) OUTPUT_DIR
-    try:
-        out_dir = Path(P1.OUTPUT_DIR)
-        if _can_write_dir(str(out_dir)):
-            return out_dir
-    except Exception:
-        pass
-
-    # 3) Desktop
-    home = Path(os.environ.get("USERPROFILE", str(Path.home())))
-    desktop = home / "Desktop"
-    return desktop
-
-
-def ensure_log_shortcut() -> None:
-    """
-    Cria um atalho .lnk que abre o arquivo de log (lite2_events.log).
-    Nome do atalho: <nome_do_arquivo>.lnk  (ex: lite2_events.log.lnk)
+    Cria um atalho .url (InternetShortcut) para o painel HTTP.
+    Não usa PowerShell => não pisca console.
     """
     try:
-        target = Path(P1.FILES["events"]).resolve()
-        # garante que o arquivo exista (ao menos vazio), para o atalho não "apontar para nada"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if not target.exists():
-            target.write_text("", encoding="utf-8")
+        url = f"http://127.0.0.1:{int(port)}/"
 
-        shortcut_dir = _choose_shortcut_dir()
-        shortcut_name = f"{target.name}.lnk"  # "lite2_events.log.lnk"
-        lnk_path = (shortcut_dir / shortcut_name).resolve()
+        # Cria ao lado do executável (prioritário)
+        try:
+            side = _side_dir()
+            side.mkdir(parents=True, exist_ok=True)
+            url_path_side = side / "Lite2 - Painel.url"
+            content = "[InternetShortcut]\n" f"URL={url}\n"
+            if not url_path_side.exists():
+                url_path_side.write_text(content, encoding="utf-8")
+        except Exception:
+            pass
 
-        # PowerShell: cria/atualiza o .lnk apontando para o arquivo
-        ps = f"""
-        $WshShell = New-Object -ComObject WScript.Shell
-        $Shortcut = $WshShell.CreateShortcut('{str(lnk_path)}')
-        $Shortcut.TargetPath = '{str(target)}'
-        $Shortcut.WorkingDirectory = '{str(target.parent)}'
-        $Shortcut.WindowStyle = 1
-        $Shortcut.Save()
-        """
-
-        # -EncodedCommand (UTF-16LE) evita problemas de aspas/caminhos com espaços
-        enc = base64.b64encode(ps.encode("utf-16le")).decode("ascii")
-
-        subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-
-        P1.log.info("Atalho do log garantido em: %s -> %s", lnk_path, target)
+        # Mantém fallback para Desktop
+        try:
+            desktop = _desktop_dir()
+            desktop.mkdir(parents=True, exist_ok=True)
+            url_path = desktop / "Lite2 - Painel.url"
+            content = "[InternetShortcut]\n" f"URL={url}\n"
+            if not url_path.exists():
+                url_path.write_text(content, encoding="utf-8")
+        except Exception:
+            pass
 
     except Exception:
-        P1.log.debug("Falha ao criar atalho do log", exc_info=True)
+        # não pode quebrar o app
+        try:
+            import _part1 as P1
+            P1.log.debug("Falha ao criar atalho do painel", exc_info=True)
+        except Exception:
+            pass
+
+
+def ensure_log_shortcut(log_path: str) -> None:
+    """
+    Cria um .lnk no Desktop que abre o log no Notepad.
+    O atalho final NÃO pisca console ao abrir.
+    A criação usa PowerShell escondido para gerar o .lnk sem depender de pywin32.
+    """
+    try:
+        lp = Path(log_path)
+        # Garante pasta do log
+        lp.parent.mkdir(parents=True, exist_ok=True)
+
+        # Primeiro: cria .lnk ao lado do executável (prioritário)
+        try:
+            side = _side_dir()
+            side.mkdir(parents=True, exist_ok=True)
+            lnk_side = side / "Lite2 - Log.lnk"
+            if not lnk_side.exists():
+                ps_side = rf"""
+$WshShell = New-Object -ComObject WScript.Shell
+$Shortcut = $WshShell.CreateShortcut("{str(lnk_side)}")
+$Shortcut.TargetPath = "$env:WINDIR\system32\notepad.exe"
+$Shortcut.Arguments = '"{str(lp)}"'
+$Shortcut.WorkingDirectory = "{str(lp.parent)}"
+$Shortcut.IconLocation = "$env:WINDIR\system32\notepad.exe,0"
+$Shortcut.Save()
+"""
+                CREATE_NO_WINDOW = 0x08000000
+                subprocess.run(
+                    ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", ps_side],
+                    creationflags=CREATE_NO_WINDOW,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+        except Exception:
+            pass
+
+        # Mantém comportamento antigo: cria no Desktop também
+        try:
+            desktop = _desktop_dir()
+            desktop.mkdir(parents=True, exist_ok=True)
+            lnk = desktop / "Lite2 - Log.lnk"
+            if lnk.exists():
+                return
+
+            ps = rf"""
+$WshShell = New-Object -ComObject WScript.Shell
+$Shortcut = $WshShell.CreateShortcut("{str(lnk)}")
+$Shortcut.TargetPath = "$env:WINDIR\system32\notepad.exe"
+$Shortcut.Arguments = '"{str(lp)}"'
+$Shortcut.WorkingDirectory = "{str(lp.parent)}"
+$Shortcut.IconLocation = "$env:WINDIR\system32\notepad.exe,0"
+$Shortcut.Save()
+"""
+
+            CREATE_NO_WINDOW = 0x08000000
+            subprocess.run(
+                ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", ps],
+                creationflags=CREATE_NO_WINDOW,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except Exception:
+            pass
+
+    except Exception:
+        try:
+            import _part1 as P1
+            P1.log.debug("Falha ao criar atalho do log", exc_info=True)
+        except Exception:
+            pass
+
 
 
 

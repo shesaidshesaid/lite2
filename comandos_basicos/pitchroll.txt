@@ -1,0 +1,3 @@
+empacotar
+pyinstaller --noconfirm --clean --onefile --noconsole --name lite2 --add-data "audioss;audioss" --collect-all pygame --collect-all requests lite2.py
+
