@@ -617,51 +617,86 @@ from pathlib import Path
 import os
 import sys
 
-def ensure_http_shortcut() -> None:
+import os
+import sys
+import shutil
+import subprocess
+from pathlib import Path
+
+def _is_probably_onedrive_path(p: Path) -> bool:
+    s = str(p).lower()
+    return ("\\onedrive" in s) or ("/onedrive" in s)
+
+def _write_url_shortcut(dst: Path, url: str) -> None:
+    content = "[InternetShortcut]\nURL={}\n".format(url)
+    dst.write_text(content, encoding="utf-8")
+
+def ensure_http_shortcut(port: int | None = None) -> None:
     """
-    Cria um atalho .url ao lado do executável (ou ao lado do script quando em dev).
-    Muito mais estável em Windows corporativo do que tentar Desktop/OneDrive.
+    - Cria atalho do painel HTTP (.url) ao lado do executável (e também no Desktop, se existir).
+    - Se estiver rodando de dentro do OneDrive (PyInstaller), copia o exe para LocalAppData e relança.
     """
+    if port is None:
+        port = int(getattr(P1, "MUTE_CTRL_PORT", 8765))
+
+    url = f"http://127.0.0.1:{port}/"
+
+    frozen = bool(getattr(sys, "frozen", False))
+    if not frozen:
+        # Em modo dev (python), só cria atalho do painel ao lado do script
+        try:
+            here = Path(__file__).resolve().parent
+            _write_url_shortcut(here / "Lite2 (Painel).url", url)
+        except Exception:
+            pass
+        return
+
+    src_exe = Path(sys.executable).resolve()
+
+    # 1) Sempre tenta criar o .url ao lado do executável atual
     try:
-        url = f"http://127.0.0.1:{int(P1.MUTE_CTRL_PORT)}/"
+        _write_url_shortcut(src_exe.parent / "Lite2 (Painel).url", url)
     except Exception:
-        url = "http://127.0.0.1:8765/"
+        pass
 
-    # 1) Descobre a pasta "do app":
-    # - Empacotado (PyInstaller): ao lado do .exe (sys.executable)
-    # - Em dev: ao lado do arquivo .py atual (ou cwd como fallback)
+    # 2) Também tenta no Desktop (pode ser redirecionado, mas é só 1 arquivo)
     try:
-        if getattr(sys, "frozen", False) and hasattr(sys, "executable"):
-            base_dir = Path(sys.executable).resolve().parent
-        else:
-            base_dir = Path(__file__).resolve().parent
+        desk = Path.home() / "Desktop"
+        if desk.exists():
+            _write_url_shortcut(desk / "Lite2 (Painel).url", url)
     except Exception:
-        base_dir = Path.cwd()
+        pass
 
-    shortcut_path = base_dir / "Pitch & Roll - Painel.url"
-
-    content = "\n".join([
-        "[InternetShortcut]",
-        f"URL={url}",
-        "IconIndex=0",
-        "IconFile=C:\\Windows\\System32\\url.dll",
-        "",
-    ])
-
+    # 3) Se o exe está em OneDrive, copia para LocalAppData e relança de lá
     try:
-        # evita regravar se já está igual
-        if shortcut_path.exists():
+        local_base = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "Lite2"
+        bin_dir = local_base / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        dst_exe = bin_dir / src_exe.name
+
+        if _is_probably_onedrive_path(src_exe):
+            # copia (ou atualiza) e relança
             try:
-                old = shortcut_path.read_text(encoding="utf-8", errors="ignore")
-                if old.strip() == content.strip():
-                    return
+                need_copy = (not dst_exe.exists()) or (dst_exe.stat().st_size != src_exe.stat().st_size)
+            except Exception:
+                need_copy = True
+
+            if need_copy:
+                shutil.copy2(src_exe, dst_exe)
+
+            # cria também o .url ao lado do exe local (para ficar “bem direto”)
+            try:
+                _write_url_shortcut(dst_exe.parent / "Lite2 (Painel).url", url)
             except Exception:
                 pass
 
-        shortcut_path.write_text(content, encoding="utf-8")
-        P1.log_event("HTTP_SHORTCUT", path=str(shortcut_path), url=url)
+            subprocess.Popen([str(dst_exe)], cwd=str(dst_exe.parent), close_fds=True)
+            raise SystemExit(0)
+
     except Exception:
-        P1.log.debug("Falha ao criar atalho .url ao lado do executável", exc_info=True)
+        # Se qualquer coisa falhar, não derruba o app
+        return
+
 
 
 

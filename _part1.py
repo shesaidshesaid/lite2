@@ -148,6 +148,12 @@ ES_CONTINUOUS, ES_SYSTEM_REQUIRED, ES_DISPLAY_REQUIRED = 0x80000000, 0x00000001,
 WAIT_OBJECT_0, EVENT_MODIFY_STATE = 0x00000000, 0x0002
 QUIT_EVENT_NAME = "Global\\PitchRollMonitorQuitEvent"
 
+from pathlib import Path
+import os
+import sys
+
+APP_NAME = "Lite2"
+
 # =========================
 # Diretórios (recursos x saída)
 # =========================
@@ -160,9 +166,25 @@ BASE_DIR = os.path.dirname(sys.executable) if IS_FROZEN else os.path.dirname(os.
 RESOURCE_ROOT = getattr(sys, "_MEIPASS", BASE_DIR) if IS_FROZEN else BASE_DIR
 AUDIO_DIR = os.path.join(RESOURCE_ROOT, "audioss")
 
-# Onde vamos gravar HTML e logs (tem que ser gravável)
-OUTPUT_DIR = escolher_output_dir("lite2")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+def _app_home_dir() -> Path:
+    """
+    Retorna um diretório gravável e estável fora do OneDrive.
+    Permite override via variável de ambiente LITE2_HOME.
+    """
+    forced = os.environ.get("LITE2_HOME")
+    if forced:
+        return Path(forced)
+
+    base = os.environ.get("LOCALAPPDATA")
+    if not base:
+        base = str(Path.home() / "AppData" / "Local")
+
+    return Path(base) / APP_NAME
+
+APP_HOME = _app_home_dir()
+OUTPUT_DIR = str((APP_HOME / "runtime").resolve())
+Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
+
 
 FILES = {
     # ÚNICO TXT (eventos + snapshots + logging padrão)

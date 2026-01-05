@@ -15,6 +15,7 @@ venv/
 .venv/
 env/
 ENV/
+venv*/
 
 ############################################
 # Logs e arquivos gerados em runtime

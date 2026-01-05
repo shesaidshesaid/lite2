@@ -268,9 +268,6 @@ def run_monitor():
 
 
 def _main():
-    P1.keep_screen_on(True)
-    atexit.register(lambda: P1.keep_screen_on(False))
-
     ap = P1.base_argparser()
     args = ap.parse_args()
 
@@ -279,6 +276,13 @@ def _main():
         msg = "OK, sinal enviado." if ok else "Nenhuma instância encontrada."
         print(msg)
         sys.exit(0)
+
+    # ANTES do mutex: se estiver no OneDrive, copia/relança do LocalAppData e sai.
+    # Também cria o atalho do painel.
+    P5.ensure_http_shortcut(P1.MUTE_CTRL_PORT)
+
+    P1.keep_screen_on(True)
+    atexit.register(lambda: P1.keep_screen_on(False))
 
     ja_existe, _ = P1.obter_mutex()
 
@@ -298,9 +302,7 @@ def _main():
         print(msg)
         sys.exit(0)
 
-    # Só aqui faz sentido iniciar servidor + criar atalho
     P5.start_control_server(P1.MUTE_CTRL_PORT)
-    P5.ensure_http_shortcut()
 
     try:
         P1.log_event("START")
@@ -310,6 +312,7 @@ def _main():
     finally:
         encerrar_gracioso()
         P1.log_event("STOP")
+
 
 
 
