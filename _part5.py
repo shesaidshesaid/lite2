@@ -32,8 +32,8 @@ _CLIENT_ABORT_EXC = (BrokenPipeError, ConnectionResetError, ConnectionAbortedErr
 # Alarm State (SIMPLIFICADO)
 # =========================================================
 
-ALARM_CONFIRM_SEC = 5.0
-ALARM_SILENCE_SEC = 11 * 60.0  # 11 minutos
+ALARM_CONFIRM_SEC = 6.0
+ALARM_SILENCE_SEC = 13 * 60.0  # 13 minutos
 
 
 # =========================================================
